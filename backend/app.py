@@ -5,7 +5,7 @@ import os
 import logging
 from dotenv import load_dotenv
 
-from backend.routes import calendar_routes
+from backend.routes import calendar_routes, dashboard_routes, property_interactions_routes, tenant_routes
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -131,30 +131,25 @@ def create_app():
     # ============================================
     from backend.routes import (
         auth_routes, db_routes,
-        notification_routes,
-        customer_routes, file_routes,
-        crm_routes, document_routes, calendar_routes,
-        import_routes, energy_renewals_routes, bulk_import_optimized, async_bulk_routes, client_interactions_routes, 
+        notification_routes,dashboard_routes,
+        document_routes, calendar_routes,
+        property_interactions_routes, tenant_routes, 
     )
 
     app.register_blueprint(auth_routes.auth_bp, url_prefix='/auth')
-    app.register_blueprint(customer_routes.energy_customer_bp)
-    app.register_blueprint(import_routes.import_bp, url_prefix='/import')
-    app.register_blueprint(energy_renewals_routes.renewals_bp)
+    app.register_blueprint(tenant_routes.energy_customer_bp)
+    # app.register_blueprint(import_routes.import_bp, url_prefix='/import')
+    app.register_blueprint(dashboard_routes.renewals_bp)
     app.register_blueprint(db_routes.db_bp)
     app.register_blueprint(notification_routes.notification_bp)
-    app.register_blueprint(file_routes.file_bp)
-    app.register_blueprint(crm_routes.crm_bp)
     app.register_blueprint(document_routes.document_bp)
     app.register_blueprint(calendar_routes.calendar_bp)
-    app.register_blueprint(client_interactions_routes.client_interaction_bp)
-    # app.register_blueprint(bulk_import_optimized.bulk_import_bp, url_prefix='/api')
-    # app.register_blueprint(async_bulk_routes.async_bulk_bp, url_prefix='/api')
+    app.register_blueprint(property_interactions_routes.client_interaction_bp)
     logging.info("CRM Blueprint registered successfully") 
     
     # Test CRM Supabase connection after blueprint registration
     try:
-        from backend.crm.repositories.tenant_repository import TenantRepository
+        from backend.properties.repositories.tenant_repository import TenantRepository
         test_repo = TenantRepository()
         test_tenant = test_repo.get_tenant_by_id(1)
         if test_tenant:

@@ -519,3 +519,102 @@ class Notification_Master(Base):
     
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     read_at = Column(DateTime(timezone=True), nullable=True)
+
+class Property_Master(Base):
+    """
+    Property Master - Main property management table
+    Replaces Client_Master for property management system
+    """
+    __tablename__ = 'Property_Master'
+    __table_args__ = {'schema': SCHEMA}
+    
+    # ── Core fields ──────────────────────────────────────────────────────────
+    property_id = Column(SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(SmallInteger, nullable=False, index=True)
+    
+    # ── Property details ─────────────────────────────────────────────────────
+    property_name = Column(String(255), nullable=False)
+    property_type = Column(String(50), nullable=True)  # apartment, house, commercial, etc.
+    address = Column(String(500), nullable=False)
+    city = Column(String(100), nullable=True, index=True)
+    state = Column(String(100), nullable=True)
+    postal_code = Column(String(20), nullable=True)
+    country = Column(String(100), nullable=True)
+    
+    # ── Status and assignment ────────────────────────────────────────────────
+    status_id = Column(SmallInteger, ForeignKey('StreemLyne_MT.Stage_Master.stage_id'), nullable=True)
+    assigned_agent_id = Column(SmallInteger, ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=True)
+    
+    # ── Financial details ────────────────────────────────────────────────────
+    monthly_rent = Column(Numeric(10, 2), nullable=True)
+    deposit_amount = Column(Numeric(10, 2), nullable=True)
+    purchase_price = Column(Numeric(10, 2), nullable=True)
+    
+    # ── Property specifications ──────────────────────────────────────────────
+    bedrooms = Column(SmallInteger, nullable=True)
+    bathrooms = Column(SmallInteger, nullable=True)
+    square_feet = Column(Integer, nullable=True)
+    year_built = Column(SmallInteger, nullable=True)
+    
+    # ── Lease details ────────────────────────────────────────────────────────
+    lease_start_date = Column(Date, nullable=True)
+    lease_end_date = Column(Date, nullable=True)
+    tenant_name = Column(String(255), nullable=True)
+    tenant_contact = Column(String(100), nullable=True)
+    tenant_email = Column(String(255), nullable=True)
+    
+    # ── Additional information ───────────────────────────────────────────────
+    description = Column(Text, nullable=True)
+    amenities = Column(Text, nullable=True)  # JSON or comma-separated
+    parking_spaces = Column(SmallInteger, nullable=True)
+    pet_friendly = Column(Boolean, default=False, nullable=True)
+    furnished = Column(Boolean, default=False, nullable=True)
+    
+    # ── Documents and media ──────────────────────────────────────────────────
+    document_details = Column(Text, nullable=True)  # JSON array of document URLs
+    
+    # ── Audit fields ─────────────────────────────────────────────────────────
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
+    created_by = Column(SmallInteger, nullable=True)
+    
+    # ── Soft delete ──────────────────────────────────────────────────────────
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_by = Column(SmallInteger, nullable=True)
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses"""
+        return {
+            'property_id': self.property_id,
+            'tenant_id': self.tenant_id,
+            'property_name': self.property_name,
+            'property_type': self.property_type,
+            'address': self.address,
+            'city': self.city,
+            'state': self.state,
+            'postal_code': self.postal_code,
+            'country': self.country,
+            'status_id': self.status_id,
+            'assigned_agent_id': self.assigned_agent_id,
+            'monthly_rent': float(self.monthly_rent) if self.monthly_rent else None,
+            'deposit_amount': float(self.deposit_amount) if self.deposit_amount else None,
+            'purchase_price': float(self.purchase_price) if self.purchase_price else None,
+            'bedrooms': self.bedrooms,
+            'bathrooms': self.bathrooms,
+            'square_feet': self.square_feet,
+            'year_built': self.year_built,
+            'lease_start_date': self.lease_start_date.isoformat() if self.lease_start_date else None,
+            'lease_end_date': self.lease_end_date.isoformat() if self.lease_end_date else None,
+            'tenant_name': self.tenant_name,
+            'tenant_contact': self.tenant_contact,
+            'tenant_email': self.tenant_email,
+            'description': self.description,
+            'amenities': self.amenities,
+            'parking_spaces': self.parking_spaces,
+            'pet_friendly': self.pet_friendly,
+            'furnished': self.furnished,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'is_deleted': self.is_deleted
+        }
