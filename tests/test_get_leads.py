@@ -57,7 +57,7 @@ def test_get_leads_returns_expected_fields_and_order(monkeypatch):
     ]
 
     # Patch repository method so no DB is required
-    from backend.crm.repositories.lead_repository import LeadRepository
+    from backend.properties.repositories.lead_repository import LeadRepository
 
     def fake_get_leads_list(self, tenant_id, filters=None):
         assert int(tenant_id) == 1
@@ -115,7 +115,7 @@ def test_get_leads_passes_stage_filter_and_tenant(monkeypatch):
     def _fake_current_user():
         request.current_user = SimpleNamespace(id=123, tenant_id=2, full_name='Test User')
 
-    from backend.crm.repositories.lead_repository import LeadRepository
+    from backend.properties.repositories.lead_repository import LeadRepository
 
     def fake_get_leads_list(self, tenant_id, filters=None):
         # ensure tenant forwarded and optional stage_id respected

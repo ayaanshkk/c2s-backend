@@ -199,3 +199,19 @@ def get_supabase_client():
         else:
             _supabase_client = _LocalCRMDBStub()
     return _supabase_client
+
+def get_supabase_client():
+    global _supabase_client
+    if _supabase_client is None:
+        if _supabase_env_configured():
+            _supabase_client = SupabaseClient()
+        else:
+            _supabase_client = _LocalCRMDBStub()
+    return _supabase_client
+
+
+# ✅ ADD THIS: Export supabase as a module-level variable
+supabase = get_supabase_client()
+
+# ✅ ADD THIS: Explicitly export
+__all__ = ['supabase', 'get_supabase_client', 'SupabaseClient']

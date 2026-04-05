@@ -5,8 +5,6 @@ import os
 import logging
 from dotenv import load_dotenv
 
-from backend.routes import calendar_routes, dashboard_routes, property_interactions_routes, tenant_routes
-
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -17,6 +15,7 @@ load_dotenv(ENV_PATH)
 
 print("DEBUG ENV PATH =", ENV_PATH)
 print("DEBUG DATABASE_URL =", os.getenv("DATABASE_URL"))
+print("DEBUG SUPABASE_URL =", os.getenv("SUPABASE_URL"))
 
 if sys.platform == 'win32':
     try:
@@ -25,10 +24,9 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-from flask import Flask, app, request, jsonify, g
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# from backend.routes import proposal_routes
 from backend.db import Base, engine, SessionLocal, test_connection, init_db
 
 
@@ -40,72 +38,47 @@ def create_app():
     # ============================================
     # CONFIG
     # ============================================
-    # JWT Secret - Single source of truth for token signing and verification
     jwt_secret = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY")
     if not jwt_secret:
         raise ValueError("JWT_SECRET_KEY must be set in environment variables")
     app.config["SECRET_KEY"] = jwt_secret
 
+    # Property Management Configuration
+    app.config["BLOB_READ_WRITE_TOKEN"] = os.getenv("BLOB_READ_WRITE_TOKEN")
+    app.config["SUPABASE_URL"] = os.getenv("SUPABASE_URL")
+    app.config["SUPABASE_SERVICE_ROLE_KEY"] = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    app.config["SUPABASE_DB_URL"] = os.getenv("SUPABASE_DB_URL")
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
+
     # ============================================
-    # ⚙️ DATABASE INITIALIZATION (NEW LOCATION)
+    # DATABASE INITIALIZATION
     # ============================================
     logging.info("Initializing database schema...")
 
     try:
-        # ✅ CRITICAL: Import models FIRST so SQLAlchemy knows about them
-        # This ensures all enum types and tables are registered
         from backend import models
         
-        logging.info("📋 Registered models:")
-        logging.info("   ✓ User")
-        logging.info("   ✓ LoginAttempt")
-        logging.info("   ✓ Customer (with sales_stage and training_stage)")
-        logging.info("   ✓ Quotation")
-        logging.info("   ✓ QuotationItem")
-        logging.info("   ✓ Invoice")
-        logging.info("   ✓ InvoiceLineItem")
-        logging.info("   ✓ Payment")
-        logging.info("   ✓ Assignment")
-        logging.info("   ✓ AuditLog")
-        logging.info("   ✓ ActionItem")
-        logging.info("   ✓ DataImport")
-        logging.info("   ✓ TestResult")
-        logging.info("   ✓ CustomerDocument")
+        logging.info("📋 Registered CRM models")
         
-        # Create tables only for SQLite; Supabase/PostgreSQL schema is managed by migrations.
         if "sqlite" in str(engine.url):
             Base.metadata.create_all(bind=engine, checkfirst=True)
         
-        # Verify tables
         from sqlalchemy import inspect
         inspector = inspect(engine)
         tables = inspector.get_table_names()
         logging.info(f"✅ Database schema initialized - {len(tables)} tables exist")
         
-        # ✅ NEW: Verify enum types exist
-        try:
-            from sqlalchemy import text
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT typname FROM pg_type 
-                    WHERE typname IN ('sales_stage_enum', 'training_stage_enum')
-                """))
-                enum_types = [row[0] for row in result]
-                
-                if 'sales_stage_enum' in enum_types:
-                    logging.info("   ✓ sales_stage_enum type exists")
-                if 'training_stage_enum' in enum_types:
-                    logging.info("   ✓ training_stage_enum type exists")
-                
-                if not enum_types:
-                    logging.info("   ⚠️  Enum types not found - you may need to run migration")
-        except Exception as enum_check_error:
-            logging.info(f"   ⚠️  Could not verify enum types: {enum_check_error}")
-        
     except Exception as e:
         logging.error("Database initialization failed: %s", e)
         import traceback
         traceback.print_exc()
+
+    # Import Property Management models
+    try:
+        from backend.properties import models as property_models
+        logging.info("📋 Property Management models registered")
+    except Exception as e:
+        logging.error(f"Property Management models failed to load: {e}")
 
     # ============================================
     # CORS
@@ -127,88 +100,107 @@ def create_app():
     )
 
     # ============================================
-    # BLUEPRINTS
+    # BLUEPRINTS - CRM SYSTEM
     # ============================================
     from backend.routes import (
         auth_routes, db_routes,
-        notification_routes,dashboard_routes,
+        notification_routes, dashboard_routes,
         document_routes, calendar_routes,
-        property_interactions_routes, tenant_routes, 
+        property_interactions_routes, tenant_routes
     )
 
     app.register_blueprint(auth_routes.auth_bp, url_prefix='/auth')
-    app.register_blueprint(tenant_routes.energy_customer_bp)
-    # app.register_blueprint(import_routes.import_bp, url_prefix='/import')
-    app.register_blueprint(dashboard_routes.renewals_bp)
+    app.register_blueprint(tenant_routes.tenant_bp)
+    app.register_blueprint(dashboard_routes.dashboard_bp)
     app.register_blueprint(db_routes.db_bp)
     app.register_blueprint(notification_routes.notification_bp)
     app.register_blueprint(document_routes.document_bp)
     app.register_blueprint(calendar_routes.calendar_bp)
-    app.register_blueprint(property_interactions_routes.client_interaction_bp)
-    logging.info("CRM Blueprint registered successfully") 
+    app.register_blueprint(property_interactions_routes.interaction_bp)
     
-    # Test CRM Supabase connection after blueprint registration
-    try:
-        from backend.properties.repositories.tenant_repository import TenantRepository
-        test_repo = TenantRepository()
-        test_tenant = test_repo.get_tenant_by_id(1)
-        if test_tenant:
-            logging.info(f"✅ CRM Supabase connection test: SUCCESS - Found tenant '{test_tenant.get('tenant_company_name')}'")
-        else:
-            logging.warning("CRM Supabase connection test: Tenant ID 1 not found")
-    except Exception as e:
-        logging.error("CRM Supabase connection test FAILED: %s", e)
+    logging.info("✅ CRM Blueprints registered")
 
     # ============================================
-    # HEALTH CHECK
+    # BLUEPRINTS - PROPERTY MANAGEMENT SYSTEM
+    # ============================================
+    print("\n🔍 DEBUG: Attempting to import property management routes...")
+    
+    try:
+        print("   Importing property_routes...")
+        from backend.routes import property_routes
+        print(f"   ✅ property_routes imported: {property_routes}")
+        print(f"   ✅ property_bp exists: {hasattr(property_routes, 'property_bp')}")
+    except Exception as e:
+        print(f"   ❌ Failed to import property_routes: {e}")
+        import traceback
+        traceback.print_exc()
+        property_routes = None
+
+    try:
+        print("   Importing agent_routes...")
+        from backend.routes import agent_routes
+        print(f"   ✅ agent_routes imported: {agent_routes}")
+        print(f"   ✅ agent_bp exists: {hasattr(agent_routes, 'agent_bp')}")
+    except Exception as e:
+        print(f"   ❌ Failed to import agent_routes: {e}")
+        import traceback
+        traceback.print_exc()
+        agent_routes = None
+
+    if property_routes and agent_routes:
+        try:
+            print("   Registering blueprints...")
+            app.register_blueprint(property_routes.property_bp, url_prefix='/api/properties')
+            print("   ✅ property_bp registered at /api/properties")
+            
+            app.register_blueprint(agent_routes.agent_bp, url_prefix='/api/agents')
+            print("   ✅ agent_bp registered at /api/agents")
+            
+            logging.info("✅ Property Management Blueprints registered")
+            
+            # Log registered property routes
+            logging.info("📍 Property Management Routes:")
+            for rule in app.url_map.iter_rules():
+                rule_str = str(rule)
+                if '/api/properties' in rule_str or '/api/agents' in rule_str:
+                    methods = ', '.join(sorted([m for m in rule.methods if m not in ['HEAD', 'OPTIONS']]))
+                    logging.info(f"   [{methods}] {rule_str}")
+        except Exception as e:
+            print(f"   ❌ Failed to register blueprints: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("   ⚠️ Skipping blueprint registration due to import errors")
+    
+    # ============================================
+    # HEALTH CHECK & INFO ENDPOINTS
     # ============================================
     @app.route("/health", methods=["GET"])
     def health_check():
         return jsonify({"status": "ok", "message": "Server is running"}), 200
 
-    # ============================================
-    # PIPELINE INFO ENDPOINT (NEW)
-    # ============================================
-    @app.route("/pipeline-info", methods=["GET"])
-    def pipeline_info():
-        """Returns information about available pipelines"""
+    @app.route("/api-info", methods=["GET"])
+    def api_info():
         return jsonify({
-            "pipelines": {
-                "sales": {
-                    "stages": ["Enquiry", "Proposal", "Converted"],
-                    "endpoint": "/pipeline/sales"
-                },
-                "training": {
-                    "stages": [
-                        "Training Scheduled",
-                        "Training Conducted",
-                        "Training Completed",
-                        "PTI Created",
-                        "Certificates Created",
-                        "Certificates Dispatched"
-                    ],
-                    "endpoint": "/pipeline/training"
-                }
-            },
-            "version": "1.0",
-            "migration_required": False
+            "service": "Multi-System Backend",
+            "version": "1.0.0",
+            "systems": {
+                "crm": {"description": "CRM and Training Pipeline"},
+                "property_management": {"description": "Property Management System"}
+            }
         }), 200
-    
-    # ============================================
-    # TEST GRADING INFO ENDPOINT (NEW)
-    # ============================================
-    @app.route("/test-grading-info", methods=["GET"])
-    def test_grading_info():
-        """Returns information about test grading system"""
-        return jsonify({
-            "test_grading": {
-                "supported_types": ["BOPT", "FORKLIFT", "REACH_TRUCK", "STACKER"],
-                "ai_model": "GPT-4o",
-                "endpoint": "/api/test-grading"
-            },
-            "version": "1.0"
-        }), 200
-    logging.debug("App url_map: %s", app.url_map)
+
+    @app.route("/debug/routes", methods=["GET"])
+    def list_routes():
+        """List all registered routes"""
+        routes = []
+        for rule in app.url_map.iter_rules():
+            routes.append({
+                'endpoint': rule.endpoint,
+                'methods': sorted(list(rule.methods - {'HEAD', 'OPTIONS'})),
+                'path': str(rule)
+            })
+        return jsonify(sorted(routes, key=lambda x: x['path'])), 200
 
     return app
 
@@ -223,68 +215,15 @@ if __name__ == "__main__":
     logging.info("🔧 INITIALISING DATABASE...")
     logging.info("=" * 60)
 
-    # Import models to register metadata
-    from backend import models
-
-    # List tables
-    from sqlalchemy import inspect
-    inspector = inspect(engine)
-    tables = inspector.get_table_names()
-    logging.info(f"\n📋 {len(tables)} tables detected:")
-    for t in sorted(tables):
-        logging.info(f"   ✓ {t}")
-
-    # Check for dual pipeline fields
-    try:
-        columns = inspector.get_columns('customers')
-        column_names = [col['name'] for col in columns]
-        
-        logging.info(f"\n📊 Customer table columns:")
-        if 'sales_stage' in column_names:
-            logging.info("   ✅ sales_stage column exists")
-        else:
-            logging.info("   ⚠️  sales_stage column missing - run migration!")
-            
-        if 'training_stage' in column_names:
-            logging.info("   ✅ training_stage column exists")
-        else:
-            logging.warning("training_stage column missing - run migration!")
-            
-        if 'pipeline_type' in column_names:
-            logging.info("   ✅ pipeline_type column exists")
-        else:
-            logging.info("   ⚠️  pipeline_type column missing - run migration!")
-            
-        if 'stage' in column_names:
-            logging.info("   ⚠️  Old 'stage' column still exists - consider running migration")
-            
-    except Exception as e:
-        logging.info(f"   ⚠️  Could not check customer columns: {e}")
-    
-    # Check for test_results table
-    try:
-        if 'test_results' in tables:
-            logging.info("\n✅ Test Results table exists")
-            test_columns = inspector.get_columns('test_results')
-            logging.info(f"   ✓ {len(test_columns)} columns configured")
-        else:
-            logging.info("\n⚠️  Test Results table missing - will be created on first run")
-    except Exception as e:
-        logging.info(f"   ⚠️  Could not check test_results table: {e}")
-
-    logging.info("\n✅ Database initialised successfully!\n")
-    logging.info("=" * 60)
-
     port = int(os.getenv("PORT", 5000))
     debug_mode = os.getenv("DEV_MODE", "false").lower() == "true"
     
     logging.info(f"\n🚀 Starting server on port {port}")
     logging.info(f"   Debug mode: {debug_mode}")
-    logging.info(f"   Access at: http://localhost:{port}")
-    logging.info(f"   Health check: http://localhost:{port}/health")
-    logging.info(f"   Pipeline info: http://localhost:{port}/pipeline-info")
-    logging.info(f"   Test Grading info: http://localhost:{port}/test-grading-info")
-    logging.info(f"   Test Grading API: http://localhost:{port}/api/test-grading/health")
+    logging.info(f"\n📍 Test Routes:")
+    logging.info(f"   http://localhost:{port}/health")
+    logging.info(f"   http://localhost:{port}/debug/routes")
+    logging.info(f"   http://localhost:{port}/api/properties")
     logging.info("\n" + "=" * 60 + "\n")
     
     try:

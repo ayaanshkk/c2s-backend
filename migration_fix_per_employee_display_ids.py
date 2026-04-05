@@ -1,5 +1,5 @@
 import logging
-from backend.crm.repositories.lead_repository import LeadRepository
+from backend.properties.repositories.lead_repository import LeadRepository
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import unittest
 from unittest.mock import Mock
 from flask import Flask, g
-from backend.crm.controllers.crm_controller import CRMController
+from backend.properties.controllers.property_controller import CRMController
 
 
 class TestLeadStatusUpdate(unittest.TestCase):

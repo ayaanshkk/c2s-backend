@@ -4,7 +4,7 @@ Project Repository
 Handles database operations for Project_Details table
 """
 from typing import Optional, Dict, Any, List
-from backend.crm.supabase_client import get_supabase_client
+from backend.properties.supabase_client import get_supabase_client
 
 
 class ProjectRepository:

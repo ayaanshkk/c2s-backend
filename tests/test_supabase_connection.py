@@ -35,7 +35,7 @@ print(f"   DATABASE_URL: {database_url if database_url else 'NOT SET'}")
 # Try to initialize Supabase client
 print(f"\n2. Initializing Supabase Client...")
 try:
-    from backend.crm.supabase_client import get_supabase_client
+    from backend.properties.supabase_client import get_supabase_client
     
     client = get_supabase_client()
     print(f"   ✓ Client created")

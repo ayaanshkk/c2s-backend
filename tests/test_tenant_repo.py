@@ -8,7 +8,7 @@ if sys.platform == 'win32':
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.crm.repositories.tenant_repository import TenantRepository
+from backend.properties.repositories.tenant_repository import TenantRepository
 
 print("Testing Tenant Repository...")
 tenant_repo = TenantRepository()

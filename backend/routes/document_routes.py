@@ -9,8 +9,8 @@ from werkzeug.utils import secure_filename
 import json
 import os
 import httpx
-from backend.properties.routes.auth_helpers import token_required
-from backend.properties.db import SessionLocal
+from backend.routes.auth_helpers import token_required
+from backend.db import SessionLocal
 from sqlalchemy import text
 import logging
 

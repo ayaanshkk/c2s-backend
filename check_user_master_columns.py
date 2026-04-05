@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv('.env')
 
-from backend.crm.supabase_client import SupabaseClient
+from backend.properties.supabase_client import SupabaseClient
 from sqlalchemy import text
 
 db = SupabaseClient()

@@ -64,7 +64,7 @@ def test_confirm_endpoint_delegates_to_service_and_returns_result(monkeypatch):
     expected = {"success": True, "inserted": 1, "skipped": 0, "errors": []}
 
     # Patch CRMService.confirm_lead_import to avoid DB dependency
-    from backend.crm.services.crm_service import CRMService
+    from backend.properties.services.crm_service import CRMService
 
     def fake_confirm(tenant_id, rows, created_by):
         assert tenant_id == 1

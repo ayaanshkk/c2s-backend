@@ -6,7 +6,7 @@ Extracts and validates tenant_id from request headers
 import os
 from functools import wraps
 from flask import request, jsonify, g
-from backend.crm.repositories.tenant_repository import TenantRepository
+from backend.properties.repositories.tenant_repository import TenantRepository
 
 
 def _is_production():

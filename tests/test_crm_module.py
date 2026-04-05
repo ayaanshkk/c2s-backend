@@ -16,7 +16,7 @@ def test_supabase_connection():
     print("=" * 60)
     
     try:
-        from backend.crm.supabase_client import get_supabase_client
+        from backend.properties.supabase_client import get_supabase_client
         
         client = get_supabase_client()
         print(f"Supabase URL: {client.supabase_url}")
@@ -44,7 +44,7 @@ def test_tenant_repository():
     print("=" * 60)
     
     try:
-        from backend.crm.repositories.tenant_repository import TenantRepository
+        from backend.properties.repositories.tenant_repository import TenantRepository
         
         tenant_repo = TenantRepository()
         
@@ -80,7 +80,7 @@ def test_lead_repository():
     print("=" * 60)
     
     try:
-        from backend.crm.repositories.lead_repository import LeadRepository
+        from backend.properties.repositories.lead_repository import LeadRepository
         
         lead_repo = LeadRepository()
         
@@ -123,7 +123,7 @@ def test_crm_service():
     print("=" * 60)
     
     try:
-        from backend.crm.services.crm_service import CRMService
+        from backend.properties.services.crm_service import CRMService
         
         crm_service = CRMService()
         test_tenant_id = 1

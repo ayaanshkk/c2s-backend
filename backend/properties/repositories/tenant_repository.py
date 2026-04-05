@@ -4,7 +4,7 @@ Tenant Repository
 Handles database operations for Tenant_Master table
 """
 from typing import Optional, Dict, Any, List
-from backend.crm.supabase_client import get_supabase_client
+from backend.properties.supabase_client import get_supabase_client
 
 
 class TenantRepository:

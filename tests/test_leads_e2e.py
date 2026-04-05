@@ -79,7 +79,7 @@ def get_app():
 
 def get_db():
     try:
-        from backend.crm.supabase_client import get_supabase_client
+        from backend.properties.supabase_client import get_supabase_client
         return get_supabase_client()
     except Exception as e:
         print("  [WARN] Supabase client not available: {}".format(e))
@@ -429,8 +429,8 @@ def run_test_4_tenant_isolation(app, db, opportunity_id_t1, headers_t1, tenant_i
     other_tenant_id = int(other_row["Tenant_id"])
 
     schema = '"StreemLyne_MT"'
-    from backend.crm.repositories.lead_repository import LeadRepository
-    from backend.crm.repositories.additional_repositories import StageRepository
+    from backend.properties.repositories.lead_repository import LeadRepository
+    from backend.properties.repositories.additional_repositories import StageRepository
     lead_repo = LeadRepository()
     stage_repo = StageRepository()
     stages = stage_repo.get_all_stages()

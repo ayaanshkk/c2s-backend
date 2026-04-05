@@ -65,7 +65,7 @@ def update_lead(self, opportunity_id: int, tenant_id: int, lead_data: Dict[str, 
 ### Imports Added
 ```python
 from flask import request
-from backend.crm.utils.role_helpers import is_admin_user
+from backend.properties.utils.role_helpers import is_admin_user
 ```
 
 ### Security Logic Flow

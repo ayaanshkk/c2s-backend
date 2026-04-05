@@ -6,7 +6,7 @@ Handles database operations for User_Master table (Property Management Users)
 import os
 import logging
 from typing import Optional, Dict, Any, List
-from backend.properties.supabase_client import get_supabase_client
+from backend.properties.supabase_client import supabase  # ✅ Import supabase directly
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,13 @@ class UserRepository:
     """
 
     def __init__(self):
+        # ✅ Add schema and supabase attributes
+        self.schema = "StreemLyne_MT"
+        self.supabase = supabase
+        self.logger = logging.getLogger(__name__)
+        
         if _supabase_configured():
-            self.db = get_supabase_client()
+            self.db = supabase  # Use supabase client
         else:
             self.db = _LocalDBStub()
 
@@ -53,7 +58,6 @@ class UserRepository:
         Returns:
             List of user records with role information
         """
-        # ✅ UPDATED: Fixed column name case (tenant_id not Tenant_id)
         query = """
             SELECT
                 um.*,
@@ -75,7 +79,6 @@ class UserRepository:
         params = [tenant_id]
 
         if active_only:
-            # ✅ Check if is_active column exists (might not be in User_Master)
             query += ' AND (um."is_active" IS NULL OR um."is_active" = TRUE)'
 
         query += ' ORDER BY um."user_name"'
@@ -190,4 +193,54 @@ class UserRepository:
             return self.db.execute_query(query, (username,), fetch_one=True)
         except Exception as e:
             logger.error(f"Error fetching user by username: {e}")
+            return None
+    
+    def get_all_agents(self):
+        """Get all property agents from Employee_Master"""
+        try:
+            query = f'''
+                SELECT 
+                    em.employee_id,
+                    em.employee_name,
+                    em.email,
+                    em.phone
+                FROM "{self.schema}"."Employee_Master" em
+                ORDER BY em.employee_name
+            '''
+            
+            # ✅ REMOVED: WHERE em.is_active = TRUE (column doesn't exist)
+            
+            result = self.supabase.execute_query(query)
+            
+            if result:
+                return result
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching all agents: {str(e)}")
+            return []
+
+    def get_agent_by_id(self, agent_id):
+        """Get agent by ID from Employee_Master"""
+        try:
+            query = f'''
+                SELECT 
+                    em.employee_id,
+                    em.employee_name,
+                    em.email,
+                    em.phone
+                FROM "{self.schema}"."Employee_Master" em
+                WHERE em.employee_id = %s
+            '''
+            
+            # ✅ REMOVED: AND em.is_active = TRUE (column doesn't exist)
+            
+            result = self.supabase.execute_query(query, (agent_id,), fetch_one=True)
+            
+            if result:
+                return result
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching agent {agent_id}: {str(e)}")
             return None

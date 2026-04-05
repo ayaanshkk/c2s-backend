@@ -8,7 +8,7 @@ if sys.platform == 'win32':
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.crm.supabase_client import get_supabase_client
+from backend.properties.supabase_client import get_supabase_client
 
 client = get_supabase_client()
 

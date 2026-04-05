@@ -11,20 +11,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ✅ UPDATED: Import from properties module
-from backend.properties.models import UserMaster
-from backend.properties.db import SessionLocal
+from backend.models import UserMaster
+from backend.db import SessionLocal
 
 
 def token_required(f):
     """
     Decorator to require valid JWT token (property management aware).
-    
-    Strategy:
-      1. Decode JWT to get employee_id (primary identity claim)
-      2. Look up UserMaster by employee_id column
-      3. Overlay tenant_id and role from JWT onto the user object
-    
-    This ensures proper tenant isolation and role-based access control.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -50,15 +43,11 @@ def token_required(f):
 
                 logger.info("🔐 JWT decoded. Keys: %s", list(payload.keys()))
 
-                # ── Identity resolution ──────────────────────────────────────
-                # JWT carries both user_id (User_Master PK) and employee_id.
-                # employee_id is the reliable scoping key for all queries.
                 employee_id_from_jwt = payload.get('employee_id')
                 user_id_from_jwt     = payload.get('user_id')
 
                 user = None
 
-                # ✅ PRIMARY: look up by employee_id
                 if employee_id_from_jwt is not None:
                     user = (
                         local_session.query(UserMaster)
@@ -66,7 +55,6 @@ def token_required(f):
                         .first()
                     )
 
-                # ✅ FALLBACK: look up by User_Master PK for old-format tokens
                 if user is None and user_id_from_jwt is not None:
                     user = local_session.get(UserMaster, user_id_from_jwt)
 
@@ -81,14 +69,11 @@ def token_required(f):
                 if not getattr(user, 'is_active', True):
                     return jsonify({'error': 'User not active'}), 401
 
-                # ── Overlay JWT claims onto user object ──────────────────────
-                # tenant_id and role always come from JWT (authoritative source)
                 user.tenant_id = payload.get('tenant_id')
                 if employee_id_from_jwt is not None:
                     user.employee_id = employee_id_from_jwt
 
                 raw_role = payload.get('role')
-                # ✅ Preserve original case — don't convert to lowercase
                 user.role = str(raw_role).strip() if raw_role else None
 
                 logger.info(
@@ -109,11 +94,14 @@ def token_required(f):
                 return jsonify({'error': 'Token is invalid or expired'}), 401
             except Exception as e:
                 logger.error("Token verification failed: %s", e)
+                import traceback
+                traceback.print_exc()  # ✅ Add full traceback
                 return jsonify({'error': 'Token verification failed'}), 401
 
+            # ✅ CRITICAL FIX: Call the function with the SAME args/kwargs
             return f(*args, **kwargs)
+            
         finally:
-            # ✅ Guard against connection errors during session close
             try:
                 local_session.close()
             except Exception as close_err:
@@ -123,7 +111,6 @@ def token_required(f):
                 )
 
     return decorated
-
 
 def get_tenant_id_from_user(user):
     """
@@ -144,7 +131,7 @@ def get_tenant_id_from_user(user):
         session = SessionLocal()
         try:
             # ✅ UPDATED: Import from properties models
-            from backend.properties.models import Employee_Master
+            from backend.models import Employee_Master
             employee = session.query(Employee_Master).filter_by(
                 employee_id=user.employee_id
             ).first()

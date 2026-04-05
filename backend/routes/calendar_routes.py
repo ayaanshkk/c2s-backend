@@ -4,8 +4,8 @@ Property Calendar Routes
 Calendar view for property viewings, inspections, and maintenance schedules
 """
 from flask import Blueprint, g, jsonify, request
-from backend.properties.routes.auth_helpers import token_required
-from backend.properties.db import SessionLocal
+from backend.routes.auth_helpers import token_required
+from backend.db import SessionLocal
 from sqlalchemy import text
 import logging
 

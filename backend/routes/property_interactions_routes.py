@@ -6,8 +6,8 @@ Handle property viewings, inspections, maintenance notes, and callbacks
 from flask import Blueprint, request, jsonify, g
 from datetime import datetime
 from sqlalchemy import text
-from backend.properties.db import SessionLocal
-from backend.properties.routes.auth_helpers import token_required
+from backend.db import SessionLocal
+from backend.routes.auth_helpers import token_required
 import logging
 
 logger = logging.getLogger(__name__)

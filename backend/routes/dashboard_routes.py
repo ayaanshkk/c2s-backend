@@ -4,8 +4,8 @@ Property Dashboard Routes
 Analytics and statistics for property management
 """
 from flask import Blueprint, request, jsonify, g
-from backend.properties.routes.auth_helpers import token_required
-from backend.properties.db import SessionLocal
+from backend.routes.auth_helpers import token_required
+from backend.db import SessionLocal
 from sqlalchemy import text, func
 from datetime import datetime, timedelta
 import logging

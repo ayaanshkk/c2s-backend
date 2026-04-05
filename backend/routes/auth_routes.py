@@ -4,8 +4,8 @@ Authentication Routes
 Login, logout, user management for property management system
 """
 from flask import Blueprint, request, jsonify, current_app, g
-from backend.properties.models import UserMaster, Employee_Master
-from backend.properties.routes.auth_helpers import token_required, require_admin
+from backend.models import UserMaster, Employee_Master
+from backend.routes.auth_helpers import token_required, require_admin
 from datetime import datetime, timedelta
 from functools import wraps
 from sqlalchemy import text
@@ -15,7 +15,7 @@ import re
 import jwt
 import logging
 
-from backend.properties.db import SessionLocal
+from backend.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 

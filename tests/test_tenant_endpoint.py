@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.crm.repositories.tenant_repository import TenantRepository
+from backend.properties.repositories.tenant_repository import TenantRepository
 
 app = Flask(__name__)
 
