@@ -117,6 +117,13 @@ def create_app():
     app.register_blueprint(document_routes.document_bp)
     app.register_blueprint(calendar_routes.calendar_bp)
     app.register_blueprint(property_interactions_routes.interaction_bp)
+
+    try:
+        from backend.routes import property_crm_routes
+        app.register_blueprint(property_crm_routes.property_crm_bp)
+        logging.info("✅ property_crm_bp registered at /api/pcrm")
+    except Exception as e:
+        logging.error("property_crm_routes failed to load: %s", e)
     
     logging.info("✅ CRM Blueprints registered")
 

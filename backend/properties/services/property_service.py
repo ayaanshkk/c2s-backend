@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, List
 from backend.properties.repositories.property_repository import PropertyRepository
 from backend.properties.repositories import PropertyStatusRepository
 from backend.properties.repositories.user_repository import UserRepository
+from backend.properties.repositories.crm_agent_repository import CrmAgentRepository
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class PropertyService:
         self.property_repo = PropertyRepository()
         self.status_repo = PropertyStatusRepository()
         self.user_repo = UserRepository()
+        self.crm_agent_repo = CrmAgentRepository()
 
     def _ensure_agent_in_tenant(self, agent_id: Optional[int], tenant_id: str) -> None:
         """Cross-tenant guard: assigned employee must belong to JWT tenant."""
@@ -32,6 +34,17 @@ class PropertyService:
         if not self.user_repo.employee_belongs_to_tenant(int(agent_id), tenant_id):
             raise PermissionError(
                 "Agent does not belong to this tenant or was not found."
+            )
+
+    def _ensure_crm_agent_assignable(
+        self, crm_agent_id: Optional[int], tenant_id: str
+    ) -> None:
+        """CRM agent must exist for tenant and be active (or None to clear)."""
+        if crm_agent_id is None:
+            return
+        if not self.crm_agent_repo.belongs_to_tenant(int(crm_agent_id), tenant_id):
+            raise PermissionError(
+                "CRM agent not found, inactive, or does not belong to this tenant."
             )
 
     def get_all_properties(
@@ -65,6 +78,9 @@ class PropertyService:
                 )
 
             self._ensure_agent_in_tenant(data.get("assigned_agent_id"), tenant_id)
+            self._ensure_crm_agent_assignable(
+                data.get("assigned_crm_agent_id"), tenant_id
+            )
 
             status_id = data.get("status_id")
             if status_id is None:
@@ -96,6 +112,10 @@ class PropertyService:
             data = _strip_tenant_from_payload(data)
             if "assigned_agent_id" in data:
                 self._ensure_agent_in_tenant(data.get("assigned_agent_id"), tenant_id)
+            if "assigned_crm_agent_id" in data:
+                self._ensure_crm_agent_assignable(
+                    data.get("assigned_crm_agent_id"), tenant_id
+                )
             return self.property_repo.update_property(property_id, tenant_id, data)
         except Exception as e:
             logger.error(f"Error updating property {property_id}: {e}")
@@ -134,6 +154,21 @@ class PropertyService:
             return self.property_repo.get_properties_by_agent(agent_id, tenant_id)
         except Exception as e:
             logger.error(f"Error fetching properties for agent {agent_id}: {e}")
+            return []
+
+    def get_properties_by_crm_agent(
+        self, crm_agent_id: int, tenant_id: str
+    ) -> List[Dict]:
+        if not self.crm_agent_repo.exists_in_tenant(crm_agent_id, tenant_id):
+            raise PermissionError("CRM agent not found for this tenant.")
+        try:
+            return self.property_repo.get_properties_by_crm_agent(
+                crm_agent_id, tenant_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Error fetching properties for CRM agent {crm_agent_id}: {e}"
+            )
             return []
 
     def get_dashboard_stats(self, tenant_id: str) -> Dict[str, Any]:

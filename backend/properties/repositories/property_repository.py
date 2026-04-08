@@ -29,8 +29,10 @@ class PropertyRepository:
             query = f'''
                 SELECT 
                     p.*,
-                    em.employee_name as assigned_agent_name
+                    COALESCE(ca.display_name, em.employee_name) AS assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
+                LEFT JOIN "{self.schema}"."crm_agents" ca
+                  ON p.assigned_crm_agent_id = ca.crm_agent_id
                 LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.is_deleted = FALSE
                   AND p.tenant_id = %s
@@ -46,7 +48,10 @@ class PropertyRepository:
                     query += " AND p.status_id = %s"
                     params.append(filters["status_id"])
                 if filters.get("agent_id") is not None:
-                    query += " AND p.assigned_agent_id = %s"
+                    query += (
+                        " AND (p.assigned_crm_agent_id = %s OR p.assigned_agent_id = %s)"
+                    )
+                    params.append(filters["agent_id"])
                     params.append(filters["agent_id"])
                 if filters.get("property_type"):
                     query += " AND p.property_type = %s"
@@ -69,8 +74,10 @@ class PropertyRepository:
             query = f'''
                 SELECT 
                     p.*,
-                    em.employee_name as assigned_agent_name
+                    COALESCE(ca.display_name, em.employee_name) AS assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
+                LEFT JOIN "{self.schema}"."crm_agents" ca
+                  ON p.assigned_crm_agent_id = ca.crm_agent_id
                 LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.property_id = %s
                   AND p.tenant_id = %s
@@ -99,14 +106,14 @@ class PropertyRepository:
             query = f'''
                 INSERT INTO "{self.schema}"."Property_Master" (
                     tenant_id, property_name, property_type, address, city,
-                    postcode, country_id, assigned_agent_id, monthly_rent,
+                    postcode, country_id, assigned_agent_id, assigned_crm_agent_id, monthly_rent,
                     purchase_price, currency_id, bedrooms, bathrooms, square_feet,
-                    status_id, main_photo_url, is_active, is_deleted,
+                    status_id, main_photo_url, document_details, is_active, is_deleted,
                     created_at, updated_at, created_by
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING property_id
             '''
@@ -120,6 +127,7 @@ class PropertyRepository:
                 data.get("postal_code", ""),
                 data.get("country_id", 1),
                 data.get("assigned_agent_id"),
+                data.get("assigned_crm_agent_id"),
                 data.get("monthly_rent", 0),
                 data.get("purchase_price", 0),
                 data.get("currency_id", 1),
@@ -128,6 +136,7 @@ class PropertyRepository:
                 data.get("square_feet", 0),
                 status_id,
                 data.get("main_photo_url"),
+                data.get("document_details"),
                 True,
                 False,
                 now,
@@ -164,10 +173,13 @@ class PropertyRepository:
                 "property_type": "property_type",
                 "address": "address",
                 "city": "city",
+                "state": "state",
                 "postal_code": "postcode",
                 "country_id": "country_id",
                 "assigned_agent_id": "assigned_agent_id",
+                "assigned_crm_agent_id": "assigned_crm_agent_id",
                 "monthly_rent": "monthly_rent",
+                "deposit_amount": "deposit_amount",
                 "purchase_price": "purchase_price",
                 "currency_id": "currency_id",
                 "bedrooms": "bedrooms",
@@ -176,6 +188,17 @@ class PropertyRepository:
                 "property_status": "property_status",
                 "status_id": "status_id",
                 "main_photo_url": "main_photo_url",
+                "document_details": "document_details",
+                "description": "description",
+                "amenities": "amenities",
+                "parking_spaces": "parking_spaces",
+                "pet_friendly": "pet_friendly",
+                "furnished": "furnished",
+                "tenant_name": "tenant_name",
+                "tenant_contact": "tenant_contact",
+                "tenant_email": "tenant_email",
+                "lease_start_date": "lease_start_date",
+                "lease_end_date": "lease_end_date",
             }
 
             for key, db_field in field_mapping.items():
@@ -256,7 +279,7 @@ class PropertyRepository:
     def get_properties_by_agent(
         self, agent_id: int, tenant_id: str
     ) -> List[Dict[str, Any]]:
-        """Properties for an agent within one tenant."""
+        """Properties assigned to legacy employee agent (assigned_agent_id)."""
         try:
             query = f'''
                 SELECT 
@@ -276,5 +299,32 @@ class PropertyRepository:
         except Exception as e:
             self.logger.error(
                 f"Error fetching properties for agent {agent_id}: {str(e)}"
+            )
+            return []
+
+    def get_properties_by_crm_agent(
+        self, crm_agent_id: int, tenant_id: str
+    ) -> List[Dict[str, Any]]:
+        """Properties assigned via assigned_crm_agent_id (CRM agents table)."""
+        try:
+            query = f'''
+                SELECT 
+                    p.*,
+                    ca.display_name AS assigned_agent_name
+                FROM "{self.schema}"."Property_Master" p
+                LEFT JOIN "{self.schema}"."crm_agents" ca
+                  ON p.assigned_crm_agent_id = ca.crm_agent_id
+                WHERE p.assigned_crm_agent_id = %s
+                  AND p.tenant_id = %s
+                  AND p.is_deleted = FALSE
+                ORDER BY p.created_at DESC
+            '''
+
+            result = self.supabase.execute_query(query, (crm_agent_id, tenant_id))
+            return result if result else []
+
+        except Exception as e:
+            self.logger.error(
+                f"Error fetching properties for CRM agent {crm_agent_id}: {str(e)}"
             )
             return []
