@@ -16,7 +16,7 @@ class TenantRepository:
     def __init__(self):
         self.db = get_supabase_client()
     
-    def get_tenant_by_id(self, tenant_id: int) -> Optional[Dict[str, Any]]:
+    def get_tenant_by_id(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve tenant by ID
         
@@ -69,7 +69,7 @@ class TenantRepository:
             print(f"Error fetching tenants: {e}")
             return []
     
-    def get_tenant_modules(self, tenant_id: int) -> List[Dict[str, Any]]:
+    def get_tenant_modules(self, tenant_id: str) -> List[Dict[str, Any]]:
         """
         Get all modules assigned to a tenant
         

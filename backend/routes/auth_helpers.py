@@ -15,6 +15,17 @@ from backend.models import UserMaster
 from backend.db import SessionLocal
 
 
+def normalize_tenant_id(value):
+    """
+    Canonical string tenant id for JWT / headers (VARCHAR slugs, e.g. fai-003).
+    Never cast to int.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s if s else None
+
+
 def token_required(f):
     """
     Decorator to require valid JWT token (property management aware).
@@ -69,7 +80,7 @@ def token_required(f):
                 if not getattr(user, 'is_active', True):
                     return jsonify({'error': 'User not active'}), 401
 
-                user.tenant_id = payload.get('tenant_id')
+                user.tenant_id = normalize_tenant_id(payload.get('tenant_id'))
                 if employee_id_from_jwt is not None:
                     user.employee_id = employee_id_from_jwt
 
@@ -125,7 +136,7 @@ def get_tenant_id_from_user(user):
         Tenant ID or None
     """
     if hasattr(user, 'tenant_id') and user.tenant_id is not None:
-        return user.tenant_id
+        return normalize_tenant_id(user.tenant_id)
 
     if hasattr(user, 'employee_id') and user.employee_id is not None:
         session = SessionLocal()
@@ -135,7 +146,7 @@ def get_tenant_id_from_user(user):
             employee = session.query(Employee_Master).filter_by(
                 employee_id=user.employee_id
             ).first()
-            return employee.tenant_id if employee else None
+            return normalize_tenant_id(employee.tenant_id) if employee else None
         finally:
             try:
                 session.close()
@@ -143,6 +154,34 @@ def get_tenant_id_from_user(user):
                 pass
 
     return None
+
+
+def get_current_tenant_id(strict: bool = True):
+    """
+    Tenant id for the active request — always from JWT (set on g.user in token_required).
+    Returns a non-empty string (VARCHAR slug) or None.
+
+    If X-Tenant-ID is present, it must match the JWT tenant_id when strict=True.
+    """
+    from flask import g
+
+    user = getattr(g, "user", None)
+    tid = normalize_tenant_id(
+        get_tenant_id_from_user(user) if user else None
+    )
+    if not tid:
+        return None
+
+    header_tid = normalize_tenant_id(request.headers.get("X-Tenant-ID"))
+    if header_tid and header_tid != tid:
+        logger.warning(
+            "X-Tenant-ID (%s) does not match JWT tenant_id (%s)",
+            header_tid,
+            tid,
+        )
+        if strict:
+            return None
+    return tid
 
 
 def is_admin_user(user) -> bool:
@@ -157,9 +196,19 @@ def is_admin_user(user) -> bool:
     """
     if not user or not hasattr(user, 'role'):
         return False
-    
-    admin_roles = ['Platform Admin', 'Tenant Super Admin', 'Admin']
-    return user.role in admin_roles
+
+    role = getattr(user, 'role', None)
+    if not role:
+        return False
+
+    # Case-insensitive — JWT/DB may use different casing
+    normalized = str(role).strip().lower()
+    admin_roles_lower = {
+        'platform admin',
+        'tenant super admin',
+        'admin',
+    }
+    return normalized in admin_roles_lower
 
 
 def require_admin(f):

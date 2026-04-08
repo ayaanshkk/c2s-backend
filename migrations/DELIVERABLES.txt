@@ -1,0 +1,47 @@
+================================================================================
+MULTITENANT STABILIZATION — DELIVERABLE SUMMARY (C2S Backend)
+================================================================================
+
+1) SCHEMA FIXES (see migrations/001_multitenant_stabilization.sql)
+   - INTEGER tenant_id on key tables; NOT NULL where backfilled
+   - Property_Master: status_id FK to Stage_Master, created_by if missing, indexes
+   - Employee_Master: indexes (tenant_id), (tenant_id, email)
+   - Opportunity_Details: index (tenant_id, opportunity_id) when table exists
+   - Legacy Client_Master / Opportunity_Details: NOT dropped (per requirements)
+
+2) NEW TABLES
+   - StreemLyne_MT.property_interactions — property-scoped activity (replaces use of
+     Client_Interactions in application code)
+   - StreemLyne_MT.rent_agreements, property_expenses, property_images
+
+3) RLS (see migrations/002_rls_policies.sql)
+   - Commented templates using (auth.jwt() ->> 'tenant_id')::integer
+   - Enable per table when JWT custom claims are configured in Supabase
+
+4) BACKEND CODE CHANGES (implemented)
+   - backend/routes/auth_helpers.py
+        * JWT tenant_id coerced to int on UserMaster
+        * get_current_tenant_id() — JWT authoritative; optional X-Tenant-ID must match
+   - backend/properties/repositories/property_repository.py
+        * All queries scoped by tenant_id; no default tenant_id = 1
+        * create_property(..., tenant_id, status_id) — INSERT uses status_id + created_by
+        * Filters use status_id (not legacy property_status for filter key)
+   - backend/properties/services/property_service.py
+        * Strips tenant_id from request payloads; resolves default status_id
+   - backend/routes/property_routes.py — passes tenant from get_current_tenant_id()
+   - backend/routes/agent_routes.py — agents + agent properties scoped to tenant
+   - backend/properties/repositories/user_repository.py — get_all_agents(tenant_id),
+        get_agent_by_id(agent_id, tenant_id)
+   - backend/routes/property_interactions_routes.py — uses property_interactions table
+
+5) SIGNUP / PUBLIC FLOWS
+   - POST /auth/signup still accepts tenant_id in JSON (no JWT yet). For strict SaaS,
+     replace with invite-only or platform-admin-only user provisioning in a follow-up.
+
+6) APPLY ORDER
+   - Backup DB → run 001_multitenant_stabilization.sql → verify Property_Master columns
+   - Deploy backend → optional: migrate historical rows from Client_Interactions to
+     property_interactions if needed
+   - Configure Supabase JWT claim tenant_id → uncomment/adapt 002_rls_policies.sql
+
+================================================================================

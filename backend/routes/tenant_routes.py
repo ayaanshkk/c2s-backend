@@ -82,7 +82,7 @@ def get_all_tenants():
         session.close()
 
 
-@tenant_bp.route('/<int:tenant_id>', methods=['GET', 'OPTIONS'])
+@tenant_bp.route('/<string:tenant_id>', methods=['GET', 'OPTIONS'])
 @token_required
 def get_tenant(tenant_id):
     """
@@ -253,7 +253,7 @@ def create_tenant():
         session.close()
 
 
-@tenant_bp.route('/<int:tenant_id>', methods=['PUT', 'PATCH', 'OPTIONS'])
+@tenant_bp.route('/<string:tenant_id>', methods=['PUT', 'PATCH', 'OPTIONS'])
 @token_required
 def update_tenant(tenant_id):
     """
@@ -339,7 +339,7 @@ def update_tenant(tenant_id):
         session.close()
 
 
-@tenant_bp.route('/<int:tenant_id>', methods=['DELETE', 'OPTIONS'])
+@tenant_bp.route('/<string:tenant_id>', methods=['DELETE', 'OPTIONS'])
 @token_required
 def delete_tenant(tenant_id):
     """
@@ -387,7 +387,7 @@ def delete_tenant(tenant_id):
         session.close()
 
 
-@tenant_bp.route('/<int:tenant_id>/stats', methods=['GET', 'OPTIONS'])
+@tenant_bp.route('/<string:tenant_id>/stats', methods=['GET', 'OPTIONS'])
 @token_required
 def get_tenant_stats(tenant_id):
     """
@@ -454,7 +454,7 @@ def get_tenant_stats(tenant_id):
         session.close()
 
 
-@tenant_bp.route('/<int:tenant_id>/toggle-status', methods=['POST', 'OPTIONS'])
+@tenant_bp.route('/<string:tenant_id>/toggle-status', methods=['POST', 'OPTIONS'])
 @token_required
 def toggle_tenant_status(tenant_id):
     """

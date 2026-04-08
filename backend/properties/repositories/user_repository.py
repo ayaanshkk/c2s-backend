@@ -47,7 +47,7 @@ class UserRepository:
         else:
             self.db = _LocalDBStub()
 
-    def get_all_users(self, tenant_id: int, active_only: bool = True) -> List[Dict[str, Any]]:
+    def get_all_users(self, tenant_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
         """
         Get all users for a tenant (property management company)
 
@@ -89,7 +89,7 @@ class UserRepository:
             logger.error(f"Error fetching users for tenant {tenant_id}: {e}")
             return []
 
-    def get_user_by_id(self, tenant_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    def get_user_by_id(self, tenant_id: str, user_id: int) -> Optional[Dict[str, Any]]:
         """
         Get a specific user by ID (with tenant isolation)
 
@@ -130,7 +130,7 @@ class UserRepository:
             logger.error(f"Error fetching user {user_id}: {e}")
             return None
 
-    def get_users_by_role(self, tenant_id: int, role_id: int) -> List[Dict[str, Any]]:
+    def get_users_by_role(self, tenant_id: str, role_id: int) -> List[Dict[str, Any]]:
         """
         Get all users with a specific role (e.g., all agents, all property managers)
 
@@ -195,8 +195,8 @@ class UserRepository:
             logger.error(f"Error fetching user by username: {e}")
             return None
     
-    def get_all_agents(self):
-        """Get all property agents from Employee_Master"""
+    def get_all_agents(self, tenant_id: str):
+        """Get property agents for one tenant (Employee_Master)."""
         try:
             query = f'''
                 SELECT 
@@ -205,23 +205,22 @@ class UserRepository:
                     em.email,
                     em.phone
                 FROM "{self.schema}"."Employee_Master" em
+                WHERE em.tenant_id = %s
                 ORDER BY em.employee_name
             '''
-            
-            # ✅ REMOVED: WHERE em.is_active = TRUE (column doesn't exist)
-            
-            result = self.supabase.execute_query(query)
-            
+
+            result = self.supabase.execute_query(query, (tenant_id,))
+
             if result:
                 return result
             return []
-            
+
         except Exception as e:
             self.logger.error(f"Error fetching all agents: {str(e)}")
             return []
 
-    def get_agent_by_id(self, agent_id):
-        """Get agent by ID from Employee_Master"""
+    def get_agent_by_id(self, agent_id: int, tenant_id: str):
+        """Get agent by ID scoped to tenant."""
         try:
             query = f'''
                 SELECT 
@@ -231,11 +230,14 @@ class UserRepository:
                     em.phone
                 FROM "{self.schema}"."Employee_Master" em
                 WHERE em.employee_id = %s
+                  AND em.tenant_id = %s
             '''
             
             # ✅ REMOVED: AND em.is_active = TRUE (column doesn't exist)
             
-            result = self.supabase.execute_query(query, (agent_id,), fetch_one=True)
+            result = self.supabase.execute_query(
+                query, (agent_id, tenant_id), fetch_one=True
+            )
             
             if result:
                 return result
@@ -244,3 +246,24 @@ class UserRepository:
         except Exception as e:
             self.logger.error(f"Error fetching agent {agent_id}: {str(e)}")
             return None
+
+    def employee_belongs_to_tenant(self, employee_id: int, tenant_id: str) -> bool:
+        """True if employee_id exists in Employee_Master for this tenant (string slug)."""
+        if not tenant_id or employee_id is None:
+            return False
+        try:
+            query = f'''
+                SELECT 1
+                FROM "{self.schema}"."Employee_Master" em
+                WHERE em.employee_id = %s AND em.tenant_id = %s
+                LIMIT 1
+            '''
+            row = self.supabase.execute_query(
+                query, (employee_id, tenant_id), fetch_one=True
+            )
+            return bool(row)
+        except Exception as e:
+            self.logger.error(
+                "employee_belongs_to_tenant failed: %s", e, exc_info=True
+            )
+            return False

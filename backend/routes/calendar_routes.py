@@ -4,7 +4,7 @@ Property Calendar Routes
 Calendar view for property viewings, inspections, and maintenance schedules
 """
 from flask import Blueprint, g, jsonify, request
-from backend.routes.auth_helpers import token_required
+from backend.routes.auth_helpers import token_required, get_current_tenant_id
 from backend.db import SessionLocal
 from sqlalchemy import text
 import logging
@@ -39,9 +39,14 @@ def get_calendar_events():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         # Get filter parameters
         agent_id = request.args.get('agent_id', type=int)
         event_type = request.args.get('event_type')  # 'viewing', 'maintenance', 'inspection'
@@ -61,32 +66,32 @@ def get_calendar_events():
         # Query property interactions (viewings, inspections, maintenance)
         query = text(f'''
             SELECT 
-                ci.interaction_id,
-                ci.property_id,
+                pi.interaction_id,
+                pi.property_id,
                 p.property_name,
                 p.address,
                 p.city,
                 p.postcode,
-                ci.interaction_type,
-                ci.interaction_date as event_date,
-                ci.notes,
-                ci.next_steps,
-                ci.reminder_date,
+                pi.interaction_type,
+                pi.interaction_date as event_date,
+                pi.notes,
+                pi.next_steps,
+                pi.reminder_date,
                 em.employee_name as agent_name,
                 s.stage_name as property_status
-            FROM "StreemLyne_MT"."Client_Interactions" ci
+            FROM "StreemLyne_MT"."property_interactions" pi
             INNER JOIN "StreemLyne_MT"."Property_Master" p 
-                ON ci.property_id = p.property_id
+                ON pi.property_id = p.property_id AND pi.tenant_id = p.tenant_id
             LEFT JOIN "StreemLyne_MT"."Employee_Master" em 
                 ON p.assigned_agent_id = em.employee_id
             LEFT JOIN "StreemLyne_MT"."Stage_Master" s 
                 ON p.status_id = s.stage_id
-            WHERE p.tenant_id = :tenant_id
+            WHERE pi.tenant_id = :tenant_id
             AND p.is_deleted = FALSE
-            AND ci.reminder_date IS NOT NULL
-            AND ci.reminder_date >= CURRENT_DATE
+            AND pi.reminder_date IS NOT NULL
+            AND pi.reminder_date >= CURRENT_DATE
             {filter_clause}
-            ORDER BY ci.reminder_date ASC
+            ORDER BY pi.reminder_date ASC
         ''')
         
         result = session.execute(query, params)
@@ -146,9 +151,14 @@ def get_properties_calendar():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         query = text('''
             SELECT 
                 property_id as id,
@@ -197,9 +207,14 @@ def get_agents_calendar():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         query = text('''
             SELECT 
                 employee_id as id,

@@ -1,7 +1,7 @@
 # backend/routes/agent_routes.py
 
 from flask import Blueprint, jsonify, request, g
-from backend.routes.auth_helpers import token_required
+from backend.routes.auth_helpers import token_required, get_current_tenant_id
 from backend.properties.repositories.user_repository import UserRepository
 import logging
 
@@ -17,9 +17,17 @@ def get_agents():  # ✅ NO current_user parameter
         return '', 204
         
     try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         repo = UserRepository()
-        agents = repo.get_all_agents()
-        
+        agents = repo.get_all_agents(tenant_id)
+
         return jsonify({
             'success': True,
             'data': agents
@@ -40,9 +48,17 @@ def get_agent(agent_id):  # ✅ NO current_user parameter
         return '', 204
         
     try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         repo = UserRepository()
-        agent = repo.get_agent_by_id(agent_id)
-        
+        agent = repo.get_agent_by_id(agent_id, tenant_id)
+
         if not agent:
             return jsonify({
                 'success': False,
@@ -69,17 +85,28 @@ def get_agent_properties(agent_id):  # ✅ NO current_user parameter
         return '', 204
         
     try:
-        from backend.properties.repositories.property_repository import PropertyRepository
-        
-        repo = PropertyRepository()
-        properties = repo.get_properties_by_agent(agent_id)
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
+        from backend.properties.services.property_service import PropertyService
+
+        service = PropertyService()
+        properties = service.get_properties_by_agent(agent_id, tenant_id)
+
         return jsonify({
             'success': True,
             'properties': properties,
             'count': len(properties) if properties else 0
         }), 200
-        
+
+    except PermissionError as e:
+        return jsonify({'success': False, 'error': str(e)}), 403
+
     except Exception as e:
         logger.error(f"Error fetching agent properties: {str(e)}")
         return jsonify({
@@ -95,11 +122,19 @@ def get_agent_stats(agent_id):  # ✅ NO current_user parameter
         return '', 204
         
     try:
-        from backend.properties.repositories.property_repository import PropertyRepository
-        
-        repo = PropertyRepository()
-        properties = repo.get_properties_by_agent(agent_id)
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
+        from backend.properties.services.property_service import PropertyService
+
+        service = PropertyService()
+        properties = service.get_properties_by_agent(agent_id, tenant_id)
+
         # Calculate stats
         total_properties = len(properties) if properties else 0
         available = sum(1 for p in properties if p.get('status_name', '').lower() == 'available') if properties else 0
@@ -123,6 +158,9 @@ def get_agent_stats(agent_id):  # ✅ NO current_user parameter
             'success': True,
             'stats': stats
         }), 200
+
+    except PermissionError as e:
+        return jsonify({'success': False, 'error': str(e)}), 403
         
     except Exception as e:
         logger.error(f"Error fetching agent stats: {str(e)}")

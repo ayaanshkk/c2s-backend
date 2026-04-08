@@ -1,0 +1,57 @@
+-- =============================================================================
+-- Supabase RLS templates — StreemLyne_MT multitenant tables
+-- =============================================================================
+-- Prerequisites:
+--   * JWT includes custom claim "tenant_id" (integer) when using Supabase Auth +
+--     custom access token hook, OR you mirror the Flask JWT claim into Supabase.
+--   * For pure Flask + service_role DB connections, RLS is bypassed — policies
+--     still protect direct PostgREST / anon key access.
+--
+-- Adjust role names if your project uses something other than authenticated.
+-- =============================================================================
+
+-- Example: enable RLS on tenant-scoped tables
+-- ALTER TABLE "StreemLyne_MT"."Property_Master" ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE "StreemLyne_MT"."Employee_Master" ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE "StreemLyne_MT"."property_interactions" ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE "StreemLyne_MT"."rent_agreements" ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE "StreemLyne_MT"."property_expenses" ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE "StreemLyne_MT"."property_images" ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE "StreemLyne_MT"."Notification_Master" ENABLE ROW LEVEL SECURITY;
+
+-- -----------------------------------------------------------------------------
+-- Policy pattern: tenant_id = (auth.jwt() ->> 'tenant_id')::int
+-- -----------------------------------------------------------------------------
+-- CREATE POLICY "tenant_isolation_select" ON "StreemLyne_MT"."Property_Master"
+--   FOR SELECT TO authenticated
+--   USING (
+--     "tenant_id" = (auth.jwt() ->> 'tenant_id')::integer
+--   );
+--
+-- CREATE POLICY "tenant_isolation_insert" ON "StreemLyne_MT"."Property_Master"
+--   FOR INSERT TO authenticated
+--   WITH CHECK (
+--     "tenant_id" = (auth.jwt() ->> 'tenant_id')::integer
+--   );
+--
+-- CREATE POLICY "tenant_isolation_update" ON "StreemLyne_MT"."Property_Master"
+--   FOR UPDATE TO authenticated
+--   USING (
+--     "tenant_id" = (auth.jwt() ->> 'tenant_id')::integer
+--   )
+--   WITH CHECK (
+--     "tenant_id" = (auth.jwt() ->> 'tenant_id')::integer
+--   );
+--
+-- CREATE POLICY "tenant_isolation_delete" ON "StreemLyne_MT"."Property_Master"
+--   FOR DELETE TO authenticated
+--   USING (
+--     "tenant_id" = (auth.jwt() ->> 'tenant_id')::integer
+--   );
+
+-- Repeat the same USING/WITH CHECK pattern for:
+--   Employee_Master, property_interactions, rent_agreements, property_expenses,
+--   property_images, Notification_Master, Opportunity_Details (if exposed), etc.
+
+-- Service role (backend workers) typically uses a role that bypasses RLS or
+-- uses supabase service key — document which connection string your Flask app uses.

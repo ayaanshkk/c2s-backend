@@ -41,23 +41,14 @@ def require_tenant(f):
         # Extract tenant_id from header
         tenant_id = request.headers.get('X-Tenant-ID')
         
-        if not tenant_id:
+        if not tenant_id or not str(tenant_id).strip():
             return jsonify({
                 'error': 'Missing tenant identifier',
                 'message': 'X-Tenant-ID header is required'
             }), 400
-        
-        # Validate tenant_id format (assuming UUID or integer)
-        try:
-            # Try to convert to int if it's numeric
-            if tenant_id.isdigit():
-                tenant_id = int(tenant_id)
-        except (ValueError, AttributeError):
-            return jsonify({
-                'error': 'Invalid tenant identifier format',
-                'message': 'X-Tenant-ID must be a valid identifier'
-            }), 400
-        
+
+        tenant_id = str(tenant_id).strip()
+
         # Validate tenant exists in database
         tenant_repo = TenantRepository()
         
@@ -75,7 +66,7 @@ def require_tenant(f):
                 default_tenant = tenant_repo.ensure_default_tenant()
                 # ✅ FIX: Use lowercase keys (PostgreSQL returns lowercase)
                 if default_tenant and default_tenant.get("tenant_id") is not None:
-                    tenant_id = int(default_tenant["tenant_id"])
+                    tenant_id = str(default_tenant["tenant_id"]).strip()
                     tenant = default_tenant
                     if not tenant.get("is_active", True):
                         tenant["is_active"] = True
@@ -119,15 +110,12 @@ def require_tenant_jwt_only(f):
             }), 401
 
         tenant_id = getattr(current_user, 'tenant_id')
-
-        # Normalize numeric tenant IDs
-        try:
-            if isinstance(tenant_id, str) and tenant_id.isdigit():
-                tenant_id = int(tenant_id)
-        except Exception:
+        if tenant_id is not None:
+            tenant_id = str(tenant_id).strip()
+        if not tenant_id:
             return jsonify({
                 'error': 'Invalid tenant identifier in token',
-                'message': 'tenant_id in token has invalid format'
+                'message': 'tenant_id in token is empty'
             }), 401
 
         # Validate tenant exists (reuse existing repo behavior)
@@ -147,7 +135,7 @@ def require_tenant_jwt_only(f):
                 default_tenant = tenant_repo.ensure_default_tenant()
                 # ✅ FIX: Use lowercase keys (PostgreSQL returns lowercase)
                 if default_tenant and default_tenant.get("tenant_id") is not None:
-                    tenant_id = int(default_tenant["tenant_id"])
+                    tenant_id = str(default_tenant["tenant_id"]).strip()
                     tenant = default_tenant
                     if not tenant.get("is_active", True):
                         tenant["is_active"] = True

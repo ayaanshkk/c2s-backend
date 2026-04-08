@@ -5,7 +5,12 @@ Login, logout, user management for property management system
 """
 from flask import Blueprint, request, jsonify, current_app, g
 from backend.models import UserMaster, Employee_Master
-from backend.routes.auth_helpers import token_required, require_admin
+from backend.routes.auth_helpers import (
+    token_required,
+    require_admin,
+    normalize_tenant_id,
+    get_current_tenant_id,
+)
 from datetime import datetime, timedelta
 from functools import wraps
 from sqlalchemy import text
@@ -74,6 +79,8 @@ def login():
     try:
         # ===== 1. PARSE REQUEST =====
         data = request.get_json() or {}
+        data.pop('tenant_id', None)
+
         if not data.get('username') or not data.get('password'):
             return jsonify({'error': 'username and password required'}), 400
 
@@ -122,11 +129,12 @@ def login():
         
         role_row = session.execute(role_sql, {'user_id': row['user_id']}).mappings().first()
 
-        # ===== 5. GENERATE JWT =====
+        # ===== 5. GENERATE JWT ===== (tenant_id always string — never from client for authz)
+        tenant_slug = normalize_tenant_id(row.get('tenant_id'))
         payload = {
             'user_id': row.get('user_id'),
             'employee_id': row.get('employee_id'),
-            'tenant_id': row.get('tenant_id'),
+            'tenant_id': tenant_slug,
             'user_name': row.get('user_name'),
             'role': role_row['role_name'] if role_row else None,
             'exp': datetime.utcnow() + timedelta(days=7),
@@ -145,7 +153,7 @@ def login():
             'username': row.get('user_name'),
             'role': role_row['role_name'] if role_row else None,
             'role_id': role_row['role_id'] if role_row else None,
-            'tenant_id': row.get('tenant_id')
+            'tenant_id': tenant_slug
         }
 
         total_time = time.time() - start_time
@@ -165,28 +173,28 @@ def login():
         session.close()
 
 @auth_bp.route('/signup', methods=['POST'])
+@token_required
+@require_admin
 def signup():
     """
-    Create property management user: insert into Employee_Master then User_Master
-    
-    Expected JSON: {
-      "tenant_id": <int>,
-      "employee_name": "...",
-      "email": "...",
-      "phone": "...",           # optional
-      "username": "...",
-      "password": "..."
-    }
+    Create user under the admin's tenant (tenant_id from JWT only — never from body).
+    Expected JSON: { "employee_name", "email", "username", "password", "phone"? }
     """
     session = SessionLocal()
     try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         data = request.get_json() or {}
-        required = ['tenant_id', 'employee_name', 'email', 'username', 'password']
+        data.pop('tenant_id', None)
+        required = ['employee_name', 'email', 'username', 'password']
         for f in required:
             if not data.get(f):
                 return jsonify({'error': f'{f} is required'}), 400
-
-        tenant_id = data.get('tenant_id')
         employee_name = data.get('employee_name').strip()
         email = data.get('email').strip()
         phone = data.get('phone')
@@ -267,7 +275,7 @@ def signup():
             'user_id': user_id,
             'employee_id': employee_id,
             'user_name': username,
-            'tenant_id': tenant_id,
+            'tenant_id': str(tenant_id),
             'email': email,
             'name': employee_name
         }
@@ -401,7 +409,9 @@ def refresh_token():
             old_payload = {}
 
         employee_id = getattr(user, 'employee_id', None) or old_payload.get('employee_id')
-        tenant_id = old_payload.get('tenant_id') or getattr(user, 'tenant_id', None)
+        tenant_id = normalize_tenant_id(
+            old_payload.get('tenant_id') or getattr(user, 'tenant_id', None)
+        )
         user_name = old_payload.get('user_name') or getattr(user, 'user_name', None)
         role = old_payload.get('role') or getattr(user, 'role', None)
 

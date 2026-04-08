@@ -166,7 +166,7 @@ class Tenant_Master(Base):
     __tablename__ = 'Tenant_Master'
     __table_args__ = {'schema': SCHEMA}
     
-    tenant_id = Column('tenant_id', SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column('tenant_id', String(128), primary_key=True)
     tenant_company_name = Column(String(255))
     tenant_contact_name = Column(String(255))
     onboarding_Date = Column('onboarding_Date', Date)
@@ -180,7 +180,7 @@ class Employee_Master(Base):
     __table_args__ = {'schema': SCHEMA}
     
     employee_id = Column(SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, nullable=True)  # bigint in DB
+    tenant_id = Column(String(128), nullable=True)
     employee_name = Column(String(255))
     employee_designation_id = Column(SmallInteger)
     phone = Column(String(50))
@@ -201,7 +201,7 @@ class Client_Master(Base):
     
     client_id = Column(SmallInteger, primary_key=True, autoincrement=True)
     tenant_client_id = Column(SmallInteger, nullable=True)
-    tenant_id = Column(SmallInteger, nullable=True)
+    tenant_id = Column(String(128), nullable=True)
     display_id = Column(Integer, nullable=True)
     assigned_employee_id = Column(SmallInteger, nullable=True)
     client_company_name = Column(String(255))
@@ -309,7 +309,7 @@ class Opportunity_Details(Base):
     opportunity_id = Column(SmallInteger, primary_key=True, autoincrement=True)
     tenant_opportunity_id = Column(SmallInteger, nullable=True)
     tenant_lead_id = Column(SmallInteger, nullable=True)  # Display ID for leads
-    tenant_id = Column(SmallInteger, nullable=True)  # ✅ REQUIRED for tenant filtering
+    tenant_id = Column(String(128), nullable=True)  # ✅ REQUIRED for tenant filtering
     client_id = Column(SmallInteger, nullable=True)
     opportunity_title = Column(String(255))
     opportunity_description = Column(Text)
@@ -442,7 +442,7 @@ class Services_Master(Base):
     __table_args__ = {'schema': SCHEMA}
     
     service_id = Column(SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id = Column(SmallInteger, nullable=True)
+    tenant_id = Column(String(128), nullable=True)
     service_title = Column(String(255))
     service_description = Column(Text)
     service_rate = Column(Float)
@@ -483,6 +483,7 @@ class Customer(Base):
     __tablename__ = 'customers'
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String(128), nullable=True, index=True)
     name = Column(String(200), nullable=False)
     phone = Column(String(50))
     email = Column(String(200))
@@ -493,6 +494,7 @@ class Customer(Base):
     def to_dict(self):
         return {
             'id': self.id,
+            'tenant_id': getattr(self, 'tenant_id', None),
             'name': self.name,
             'phone': self.phone,
             'email': self.email,
@@ -505,7 +507,7 @@ class Notification_Master(Base):
     __table_args__ = {'schema': 'StreemLyne_MT'}
     
     notification_id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, nullable=False)
+    tenant_id = Column(String(128), nullable=False)
     employee_id = Column(Integer, nullable=True)
     client_id = Column(Integer, nullable=True)
     contract_id = Column(Integer, nullable=True)
@@ -530,7 +532,7 @@ class Property_Master(Base):
     
     # ── Core fields ──────────────────────────────────────────────────────────
     property_id = Column(SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id = Column(SmallInteger, nullable=False, index=True)
+    tenant_id = Column(String(128), nullable=False, index=True)
     
     # ── Property details ─────────────────────────────────────────────────────
     property_name = Column(String(255), nullable=False)

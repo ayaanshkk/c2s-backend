@@ -8,7 +8,7 @@ from ..db import SessionLocal
 from ..models import (
     User, Customer, UserMaster
 )
-from .auth_helpers import token_required
+from .auth_helpers import token_required, get_current_tenant_id
 
 db_bp = Blueprint('database', __name__)
 
@@ -109,28 +109,41 @@ def handle_legacy_customers():
     
     session = SessionLocal()
     try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         if request.method == 'POST':
-            data = request.json
-            
+            data = request.json or {}
+            data.pop('tenant_id', None)
+
             customer = Customer(
+                tenant_id=tenant_id,
                 name=data.get('name', ''),
                 phone=data.get('phone'),
                 email=data.get('email'),
                 address=data.get('address')
             )
-            
+
             session.add(customer)
             session.commit()
             session.refresh(customer)
-            
+
             return jsonify({
                 'id': customer.id,
                 'message': 'Customer created successfully',
                 'customer': customer.to_dict()
             }), 201
-        
-        # GET
-        customers = session.query(Customer).order_by(Customer.created_at.desc()).all()
+
+        customers = (
+            session.query(Customer)
+            .filter(Customer.tenant_id == tenant_id)
+            .order_by(Customer.created_at.desc())
+            .all()
+        )
         return jsonify([c.to_dict() for c in customers])
     
     except Exception as e:
@@ -150,16 +163,24 @@ def handle_single_legacy_customer(customer_id):
     
     session = SessionLocal()
     try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         customer = session.query(Customer).filter_by(id=customer_id).first()
-        if not customer:
+        if not customer or getattr(customer, 'tenant_id', None) != tenant_id:
             return jsonify({'error': 'Customer not found'}), 404
         
         if request.method == 'GET':
             return jsonify(customer.to_dict())
         
         elif request.method == 'PUT':
-            data = request.json
-            
+            data = request.json or {}
+            data.pop('tenant_id', None)
+
             customer.name = data.get('name', customer.name)
             customer.phone = data.get('phone', customer.phone)
             customer.email = data.get('email', customer.email)

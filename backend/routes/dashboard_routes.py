@@ -4,7 +4,7 @@ Property Dashboard Routes
 Analytics and statistics for property management
 """
 from flask import Blueprint, request, jsonify, g
-from backend.routes.auth_helpers import token_required
+from backend.routes.auth_helpers import token_required, get_current_tenant_id
 from backend.db import SessionLocal
 from sqlalchemy import text, func
 from datetime import datetime, timedelta
@@ -51,9 +51,14 @@ def get_dashboard_overview():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         # Optional agent filter
         agent_id = request.args.get('agent_id', type=int)
         
@@ -153,9 +158,14 @@ def get_agent_performance():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         query = text('''
             SELECT
                 em.employee_id,
@@ -234,9 +244,14 @@ def get_status_breakdown():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         query = text('''
             SELECT
                 s.stage_id,
@@ -295,9 +310,14 @@ def get_location_breakdown():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         query = text('''
             SELECT
                 COALESCE(p.city, 'Unknown') as city,
@@ -364,9 +384,14 @@ def get_property_type_breakdown():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         query = text('''
             SELECT
                 COALESCE(p.property_type, 'Unknown') as property_type,
@@ -432,9 +457,14 @@ def get_recent_activity():
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         # Recent properties (last 30 days)
         query = text('''
             SELECT

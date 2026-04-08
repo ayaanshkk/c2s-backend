@@ -1,13 +1,32 @@
 # backend/routes/property_routes.py
 
 from flask import Blueprint, request, jsonify, g
-from backend.routes.auth_helpers import token_required, require_admin
+from backend.routes.auth_helpers import (
+    token_required,
+    require_admin,
+    get_current_tenant_id,
+)
 from backend.properties.services.property_service import PropertyService
 import logging
 
 logger = logging.getLogger(__name__)
 
 property_bp = Blueprint('property', __name__)
+
+
+def _tenant_or_403():
+    tid = get_current_tenant_id()
+    if not tid:
+        return None, (
+            jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID does not match JWT',
+            }),
+            403,
+        )
+    return tid, None
+
 
 @property_bp.route('/statuses', methods=['GET', 'OPTIONS'])
 @token_required
@@ -40,6 +59,10 @@ def get_properties():  # ✅ NO current_user parameter
         return '', 204
         
     try:
+        tenant_id, err = _tenant_or_403()
+        if err:
+            return err
+
         filters = {
             'city': request.args.get('city'),
             'status_id': request.args.get('status_id', type=int),
@@ -50,7 +73,7 @@ def get_properties():  # ✅ NO current_user parameter
         filters = {k: v for k, v in filters.items() if v is not None}
         
         service = PropertyService()
-        properties = service.get_all_properties(filters)
+        properties = service.get_all_properties(tenant_id, filters)
         
         return jsonify({
             'success': True,
@@ -72,8 +95,12 @@ def get_property(property_id):
         return '', 204
         
     try:
+        tenant_id, err = _tenant_or_403()
+        if err:
+            return err
+
         service = PropertyService()
-        property_data = service.get_property_by_id(property_id)
+        property_data = service.get_property_by_id(property_id, tenant_id)
         
         if not property_data:
             return jsonify({
@@ -109,6 +136,10 @@ def create_property():
                 'success': False,
                 'error': 'No data provided'
             }), 400
+
+        tenant_id, terr = _tenant_or_403()
+        if terr:
+            return terr
         
         current_user = g.user
         logger.info(f"👤 Current user employee_id: {current_user.employee_id}")
@@ -116,7 +147,9 @@ def create_property():
         service = PropertyService()
         logger.info("🔧 Calling service.create_property...")
         
-        property_data = service.create_property(data, current_user.employee_id)
+        property_data = service.create_property(
+            data, current_user.employee_id, tenant_id
+        )
         
         logger.info(f"📊 Property data type: {type(property_data)}")
         logger.info(f"📊 Property data value: {property_data}")
@@ -150,6 +183,9 @@ def create_property():
             'property': property_data,
             'message': 'Property created successfully'
         }), 201
+
+    except PermissionError as e:
+        return jsonify({'success': False, 'error': str(e)}), 403
         
     except Exception as e:
         logger.error(f"❌ Error creating property: {str(e)}")
@@ -174,15 +210,22 @@ def update_property(property_id):
                 'success': False,
                 'error': 'No data provided'
             }), 400
+
+        tenant_id, err = _tenant_or_403()
+        if err:
+            return err
         
         service = PropertyService()
-        property_data = service.update_property(property_id, data)
+        property_data = service.update_property(property_id, tenant_id, data)
         
         return jsonify({
             'success': True,
             'property': property_data,
             'message': 'Property updated successfully'
         }), 200
+
+    except PermissionError as e:
+        return jsonify({'success': False, 'error': str(e)}), 403
         
     except Exception as e:
         logger.error(f"Error updating property: {str(e)}")
@@ -200,9 +243,15 @@ def delete_property(property_id):
         return '', 204
         
     try:
+        tenant_id, err = _tenant_or_403()
+        if err:
+            return err
+
         current_user = g.user
         service = PropertyService()
-        success = service.delete_property(property_id, current_user.employee_id)
+        success = service.delete_property(
+            property_id, current_user.employee_id, tenant_id
+        )
         
         if not success:
             return jsonify({
@@ -238,15 +287,22 @@ def assign_property(property_id):
                 'success': False,
                 'error': 'Agent ID is required'
             }), 400
+
+        tenant_id, err = _tenant_or_403()
+        if err:
+            return err
         
         service = PropertyService()
-        property_data = service.assign_to_agent(property_id, agent_id)
+        property_data = service.assign_to_agent(property_id, agent_id, tenant_id)
         
         return jsonify({
             'success': True,
             'property': property_data,
             'message': 'Property assigned successfully'
         }), 200
+
+    except PermissionError as e:
+        return jsonify({'success': False, 'error': str(e)}), 403
         
     except Exception as e:
         logger.error(f"Error assigning property: {str(e)}")
@@ -263,8 +319,12 @@ def get_dashboard_stats():
         return '', 204
         
     try:
+        tenant_id, err = _tenant_or_403()
+        if err:
+            return err
+
         service = PropertyService()
-        stats = service.get_dashboard_stats()
+        stats = service.get_dashboard_stats(tenant_id)
         
         return jsonify({
             'success': True,
@@ -286,8 +346,12 @@ def get_agent_properties(agent_id):
         return '', 204
         
     try:
+        tenant_id, err = _tenant_or_403()
+        if err:
+            return err
+
         service = PropertyService()
-        properties = service.get_properties_by_agent(agent_id)
+        properties = service.get_properties_by_agent(agent_id, tenant_id)
         
         return jsonify({
             'success': True,

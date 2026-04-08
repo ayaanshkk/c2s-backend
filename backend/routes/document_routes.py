@@ -6,10 +6,11 @@ Uses Vercel Blob Storage
 """
 from flask import Blueprint, request, jsonify, current_app, g
 from werkzeug.utils import secure_filename
+from datetime import datetime
 import json
 import os
 import httpx
-from backend.routes.auth_helpers import token_required
+from backend.routes.auth_helpers import token_required, get_current_tenant_id
 from backend.db import SessionLocal
 from sqlalchemy import text
 import logging
@@ -96,9 +97,14 @@ def upload_property_documents(property_id):
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         # Verify property exists and belongs to user's tenant
         property_check = session.execute(text('''
             SELECT property_id, property_name
@@ -175,7 +181,9 @@ def upload_property_documents(property_id):
                 SELECT document_details
                 FROM "StreemLyne_MT"."Property_Master"
                 WHERE property_id = :property_id
-            '''), {'property_id': property_id}).first()
+                  AND tenant_id = :tenant_id
+                  AND is_deleted = FALSE
+            '''), {'property_id': property_id, 'tenant_id': tenant_id}).first()
             
             existing_docs = []
             if existing_result and existing_result.document_details:
@@ -194,8 +202,11 @@ def upload_property_documents(property_id):
                 SET document_details = :docs,
                     updated_at = NOW()
                 WHERE property_id = :property_id
+                  AND tenant_id = :tenant_id
+                  AND is_deleted = FALSE
             '''), {
                 'property_id': property_id,
+                'tenant_id': tenant_id,
                 'docs': json.dumps(all_docs)
             })
             
@@ -236,9 +247,14 @@ def get_property_documents(property_id):
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         result = session.execute(text('''
             SELECT document_details
             FROM "StreemLyne_MT"."Property_Master"
@@ -297,9 +313,14 @@ def delete_property_document(property_id, document_index):
     session = SessionLocal()
     
     try:
-        user = g.user
-        tenant_id = user.tenant_id
-        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
         # Get current documents
         result = session.execute(text('''
             SELECT document_details
@@ -343,8 +364,11 @@ def delete_property_document(property_id, document_index):
             SET document_details = :docs,
                 updated_at = NOW()
             WHERE property_id = :property_id
+              AND tenant_id = :tenant_id
+              AND is_deleted = FALSE
         '''), {
             'property_id': property_id,
+            'tenant_id': tenant_id,
             'docs': json.dumps(documents)
         })
         

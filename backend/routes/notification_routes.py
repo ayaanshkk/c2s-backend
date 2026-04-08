@@ -24,7 +24,7 @@ def get_tenant_id_from_user(user):
         session.close()
 
 
-def create_assignment_notification(session, tenant_id: int, client_id: int, assigned_employee_id: int, assigned_by_name: str, display_id: int = None):
+def create_assignment_notification(session, tenant_id: str, client_id: int, assigned_employee_id: int, assigned_by_name: str, display_id: int = None):
     """Create a notification when a record is assigned to an employee."""
     try:
         sql = text('''
@@ -156,7 +156,7 @@ def get_production_notifications():
         session.close()
 
 
-def _generate_notifications_for_tenant(session, tenant_id: int) -> int:
+def _generate_notifications_for_tenant(session, tenant_id: str) -> int:
     """
     Core logic: generate contract expiry notifications for a tenant.
     Only notifies the assigned employee — no admin broadcast.
