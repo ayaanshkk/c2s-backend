@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Property interaction routes — uses dedicated table property_interactions (not Client_Interactions).
+Property interaction routes — property-scoped rows in Client_Interactions
+(tenant_slug + property_id; client_id NULL).
 """
 from flask import Blueprint, request, jsonify, g
 from datetime import datetime
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 interaction_bp = Blueprint("interactions", __name__, url_prefix="/api/interactions")
 
 SCHEMA = "StreemLyne_MT"
-PI = f'"{SCHEMA}"."property_interactions"'
+CI = f'"{SCHEMA}"."Client_Interactions"'
 
 
 @interaction_bp.after_request
@@ -100,18 +101,19 @@ def create_interaction(property_id):
                 ), 400
 
         employee_id = getattr(g.user, "employee_id", None)
+        notes_val = data.get("notes") or ""
 
         insert_query = text(
             f"""
-            INSERT INTO {PI} (
-                tenant_id, property_id, employee_id,
-                interaction_type, interaction_date, reminder_date,
-                notes, next_steps, contact_method, created_at
+            INSERT INTO {CI} (
+                client_id, contact_date, contact_method, notes, next_steps,
+                reminder_date, created_at,
+                tenant_slug, property_id, interaction_kind, employee_id
             )
             VALUES (
-                :tenant_id, :property_id, :employee_id,
-                :interaction_type, :interaction_date, :reminder_date,
-                :notes, :next_steps, :contact_method, NOW()
+                NULL, :contact_date, 1, :notes, :next_steps,
+                :reminder_date, NOW(),
+                :tenant_slug, :property_id, :interaction_kind, :employee_id
             )
             RETURNING interaction_id
         """
@@ -120,15 +122,14 @@ def create_interaction(property_id):
         result = session.execute(
             insert_query,
             {
-                "tenant_id": tenant_id,
-                "property_id": property_id,
-                "employee_id": employee_id,
-                "interaction_type": interaction_type,
-                "interaction_date": interaction_date or datetime.utcnow().date(),
-                "reminder_date": reminder_date,
-                "notes": data.get("notes", ""),
+                "contact_date": interaction_date or datetime.utcnow().date(),
+                "notes": notes_val,
                 "next_steps": data.get("next_steps"),
-                "contact_method": 1,
+                "reminder_date": reminder_date,
+                "tenant_slug": tenant_id,
+                "property_id": property_id,
+                "interaction_kind": interaction_type,
+                "employee_id": employee_id,
             },
         )
         interaction_id = result.scalar()
@@ -173,20 +174,20 @@ def get_property_interactions(property_id):
         query = text(
             f"""
             SELECT
-                pi.interaction_id,
-                pi.interaction_type,
-                pi.interaction_date,
-                pi.reminder_date,
-                pi.notes,
-                pi.next_steps,
-                pi.created_at,
+                ci.interaction_id,
+                ci.interaction_kind AS interaction_type,
+                ci.contact_date AS interaction_date,
+                ci.reminder_date,
+                ci.notes,
+                ci.next_steps,
+                ci.created_at,
                 em.employee_name AS created_by
-            FROM {PI} pi
+            FROM {CI} ci
             LEFT JOIN "{SCHEMA}"."Employee_Master" em
-                ON pi.employee_id = em.employee_id
-            WHERE pi.property_id = :property_id
-              AND pi.tenant_id = :tenant_id
-            ORDER BY pi.interaction_date DESC NULLS LAST, pi.created_at DESC
+                ON ci.employee_id = em.employee_id
+            WHERE ci.property_id = :property_id
+              AND ci.tenant_slug = :tenant_id
+            ORDER BY ci.contact_date DESC NULLS LAST, ci.created_at DESC
         """
         )
 
@@ -248,9 +249,10 @@ def delete_interaction(interaction_id):
 
         delete_query = text(
             f"""
-            DELETE FROM {PI}
+            DELETE FROM {CI}
             WHERE interaction_id = :interaction_id
-              AND tenant_id = :tenant_id
+              AND tenant_slug = :tenant_id
+              AND property_id IS NOT NULL
             RETURNING interaction_id
         """
         )
@@ -324,10 +326,11 @@ def update_interaction(interaction_id):
 
         update_query = text(
             f"""
-            UPDATE {PI}
+            UPDATE {CI}
             SET {", ".join(update_fields)}
             WHERE interaction_id = :interaction_id
-              AND tenant_id = :tenant_id
+              AND tenant_slug = :tenant_id
+              AND property_id IS NOT NULL
             RETURNING interaction_id
         """
         )

@@ -168,3 +168,51 @@ def get_agent_stats(agent_id):  # ✅ NO current_user parameter
             'success': False,
             'error': str(e)
         }), 500
+
+
+@agent_bp.route('/', methods=['POST', 'OPTIONS'])
+@token_required
+def create_agent():
+    """Create an employee record for the current tenant (agent directory)."""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
+        data = request.get_json() or {}
+        name = (data.get('employee_name') or data.get('name') or '').strip()
+        email = (data.get('email') or '').strip()
+        phone = (data.get('phone') or '').strip() or None
+
+        if not name:
+            return jsonify({'success': False, 'error': 'employee_name is required'}), 400
+        if not email:
+            return jsonify({'success': False, 'error': 'email is required'}), 400
+
+        repo = UserRepository()
+        row = repo.create_employee_agent(tenant_id, name, email, phone)
+        if not row:
+            return jsonify({'success': False, 'error': 'Could not create agent'}), 500
+
+        return jsonify({
+            'success': True,
+            'agent': row,
+            'message': 'Agent created successfully',
+        }), 201
+
+    except Exception as e:
+        err = str(e).lower()
+        if 'unique' in err or 'duplicate' in err:
+            return jsonify({
+                'success': False,
+                'error': 'An employee with this email may already exist',
+            }), 409
+        logger.error('Error creating agent: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500

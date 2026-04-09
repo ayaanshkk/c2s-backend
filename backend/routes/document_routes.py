@@ -124,25 +124,24 @@ def upload_property_documents(property_id):
                 'error': 'Property not found'
             }), 404
         
-        # Get uploaded files
-        if 'documents' not in request.files:
-            return jsonify({
-                'success': False,
-                'error': 'No documents provided'
-            }), 400
-        
+        # Get uploaded files: `documents` (multi) or legacy `file` (single)
         files = request.files.getlist('documents')
-        if not files or len(files) == 0:
-            return jsonify({
-                'success': False,
-                'error': 'No documents selected'
-            }), 400
-        
+        if not files or not any(f and f.filename for f in files):
+            single = request.files.get('file')
+            if single and single.filename:
+                files = [single]
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'No documents provided'
+                }), 400
+
         document_type = request.form.get('document_type', 'other')
+        display_name_raw = (request.form.get('display_name') or '').strip()
         uploaded_urls = []
         
         # Upload each file to Vercel Blob
-        for file in files:
+        for idx, file in enumerate(files):
             if file and file.filename:
                 try:
                     filename = secure_filename(file.filename)
@@ -154,10 +153,15 @@ def upload_property_documents(property_id):
                         data=file.read(),
                         content_type=file.content_type or 'application/octet-stream'
                     )
+
+                    display_name = display_name_raw or filename
+                    if len(files) > 1 and not display_name_raw:
+                        display_name = f"{filename} ({idx + 1})"
                     
                     uploaded_urls.append({
                         'url': url,
                         'filename': filename,
+                        'name': display_name,
                         'type': document_type,
                         'uploaded_at': datetime.utcnow().isoformat()
                     })

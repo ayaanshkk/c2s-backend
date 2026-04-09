@@ -15,7 +15,7 @@
 -- ALTER TABLE "StreemLyne_MT"."Employee_Master" ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE "StreemLyne_MT"."property_interactions" ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE "StreemLyne_MT"."rent_agreements" ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE "StreemLyne_MT"."property_expenses" ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE "StreemLyne_MT"."Property_Expenses" ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE "StreemLyne_MT"."property_images" ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE "StreemLyne_MT"."Notification_Master" ENABLE ROW LEVEL SECURITY;
 
@@ -50,7 +50,7 @@
 --   );
 
 -- Repeat the same USING/WITH CHECK pattern for:
---   Employee_Master, property_interactions, rent_agreements, property_expenses,
+--   Employee_Master, property_interactions, rent_agreements, Property_Expenses,
 --   property_images, Notification_Master, Opportunity_Details (if exposed), etc.
 
 -- Service role (backend workers) typically uses a role that bypasses RLS or

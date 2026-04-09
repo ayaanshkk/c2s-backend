@@ -396,6 +396,10 @@ class Client_Interactions(Base):
     next_steps = Column(String(500))
     reminder_date = Column(Date)
     created_at = Column(DateTime)
+    tenant_slug = Column(String(128), nullable=True)
+    property_id = Column(SmallInteger, nullable=True)
+    interaction_kind = Column(String(32), nullable=True)
+    employee_id = Column(SmallInteger, nullable=True)
 
 
 class Supplier_Master(Base):
@@ -540,8 +544,10 @@ class Property_Master(Base):
     address = Column(String(500), nullable=False)
     city = Column(String(100), nullable=True, index=True)
     state = Column(String(100), nullable=True)
-    postcode = Column(String(20), nullable=True)  # ✅ Changed from postal_code
+    postcode = Column(String(20), nullable=True)  
     country_id = Column(SmallInteger, ForeignKey('StreemLyne_MT.Country_Master.country_id'), nullable=True)
+    photo_urls = Column(Text)
+    main_photo_url = Column(Text)
     
     # ── Status and assignment ────────────────────────────────────────────────
     status_id = Column(SmallInteger, ForeignKey('StreemLyne_MT.Stage_Master.stage_id'), nullable=True)
@@ -600,7 +606,7 @@ class Property_Master(Base):
             'address': self.address,
             'city': self.city,
             'state': self.state,
-            'postcode': self.postcode,  # ✅ Changed from postal_code
+            'postcode': self.postcode,  # 
             'country_id': self.country_id,
             'status_id': self.status_id,
             'assigned_agent_id': self.assigned_agent_id,
@@ -624,6 +630,69 @@ class Property_Master(Base):
             'furnished': self.furnished,
             'main_photo_url': self.main_photo_url,  # ✅ Added
             'is_active': self.is_active,  # ✅ Added
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'is_deleted': self.is_deleted
+        }
+    
+class PropertyPayment(Base):
+    """
+    Property Payment - Monthly payment tracking for properties
+    """
+    __tablename__ = 'Property_Payments'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # ── Core fields ──────────────────────────────────────────────────────────
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(128), nullable=False, index=True)
+    property_id = Column(SmallInteger, ForeignKey('StreemLyne_MT.Property_Master.property_id'), nullable=False, index=True)
+    
+    # ── Payment details ──────────────────────────────────────────────────────
+    month = Column(String(7), nullable=False)  # Format: YYYY-MM
+    amount = Column(Numeric(10, 2), nullable=False, default=0)
+    status = Column(String(20), nullable=False, default='NOT_PAID')  # PAID or NOT_PAID
+    notes = Column(Text, nullable=True)
+    
+    # ── Audit fields ─────────────────────────────────────────────────────────
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses"""
+        return {
+            'property_id': self.property_id,
+            'tenant_id': self.tenant_id,
+            'property_name': self.property_name,
+            'property_type': self.property_type,
+            'occupancy_status': self.occupancy_status,  
+            'address': self.address,
+            'city': self.city,
+            'state': self.state,
+            'postcode': self.postcode,
+            'country_id': self.country_id,
+            'status_id': self.status_id,
+            'assigned_agent_id': self.assigned_agent_id,
+            'monthly_rent': float(self.monthly_rent) if self.monthly_rent else None,
+            'rent_due_day': self.rent_due_day,  
+            'deposit_amount': float(self.deposit_amount) if self.deposit_amount else None,
+            'purchase_price': float(self.purchase_price) if self.purchase_price else None,
+            'currency_id': self.currency_id,
+            'bedrooms': self.bedrooms,
+            'bathrooms': self.bathrooms,
+            'square_feet': self.square_feet,
+            'year_built': self.year_built,
+            'lease_start_date': self.lease_start_date.isoformat() if self.lease_start_date else None,
+            'lease_end_date': self.lease_end_date.isoformat() if self.lease_end_date else None,
+            'tenant_name': self.tenant_name,
+            'tenant_contact': self.tenant_contact,
+            'tenant_email': self.tenant_email,
+            'description': self.description,
+            'amenities': self.amenities,
+            'parking_spaces': self.parking_spaces,
+            'pet_friendly': self.pet_friendly,
+            'furnished': self.furnished,
+            'main_photo_url': self.main_photo_url,
+            'is_active': self.is_active,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted

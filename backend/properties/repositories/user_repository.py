@@ -247,6 +247,32 @@ class UserRepository:
             self.logger.error(f"Error fetching agent {agent_id}: {str(e)}")
             return None
 
+    def create_employee_agent(
+        self, tenant_id: str, employee_name: str, email: str, phone: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """Insert Employee_Master row for this tenant (property agent directory)."""
+        if not tenant_id or not employee_name or not email:
+            return None
+        try:
+            query = f'''
+                INSERT INTO "{self.schema}"."Employee_Master" (
+                    tenant_id, employee_name, email, phone
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING employee_id, employee_name, email, phone
+            '''
+            result = self.supabase.execute_insert(
+                query,
+                (tenant_id, employee_name.strip(), email.strip(), phone or None),
+                returning=True,
+            )
+            if isinstance(result, dict) and result.get("employee_id") is not None:
+                return result
+            return None
+        except Exception as e:
+            self.logger.error("create_employee_agent failed: %s", e)
+            raise
+
     def employee_belongs_to_tenant(self, employee_id: int, tenant_id: str) -> bool:
         """True if employee_id exists in Employee_Master for this tenant (string slug)."""
         if not tenant_id or employee_id is None:

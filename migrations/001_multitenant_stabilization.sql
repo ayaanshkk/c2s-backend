@@ -5,7 +5,7 @@
 -- Goals:
 --   - INTEGER tenant_id NOT NULL on tenant-owned tables where applicable
 --   - Property_Master: align status_id, indexes
---   - New: property_interactions, rent_agreements, property_expenses, property_images
+--   - New: property_interactions, rent_agreements, Property_Expenses, property_images
 -- =============================================================================
 
 SET search_path TO "StreemLyne_MT", public;
@@ -120,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_property_interactions_tenant ON "StreemLyne_MT"."
 CREATE INDEX IF NOT EXISTS idx_property_interactions_tenant_property ON "StreemLyne_MT"."property_interactions" ("tenant_id", "property_id");
 
 -- -----------------------------------------------------------------------------
--- 6) New: rent_agreements, property_expenses, property_images
+-- 6) New: rent_agreements, Property_Expenses, property_images
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "StreemLyne_MT"."rent_agreements" (
   "agreement_id"   BIGSERIAL PRIMARY KEY,
@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS "StreemLyne_MT"."rent_agreements" (
 CREATE INDEX IF NOT EXISTS idx_rent_agreements_tenant ON "StreemLyne_MT"."rent_agreements" ("tenant_id");
 CREATE INDEX IF NOT EXISTS idx_rent_agreements_t_property ON "StreemLyne_MT"."rent_agreements" ("tenant_id", "property_id");
 
-CREATE TABLE IF NOT EXISTS "StreemLyne_MT"."property_expenses" (
+CREATE TABLE IF NOT EXISTS "StreemLyne_MT"."Property_Expenses" (
   "expense_id"     BIGSERIAL PRIMARY KEY,
   "tenant_id"      INTEGER NOT NULL REFERENCES "StreemLyne_MT"."Tenant_Master" ("tenant_id"),
   "property_id"    SMALLINT NOT NULL REFERENCES "StreemLyne_MT"."Property_Master" ("property_id"),
@@ -148,8 +148,8 @@ CREATE TABLE IF NOT EXISTS "StreemLyne_MT"."property_expenses" (
   "description"    TEXT,
   "created_at"     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_property_expenses_tenant ON "StreemLyne_MT"."property_expenses" ("tenant_id");
-CREATE INDEX IF NOT EXISTS idx_property_expenses_t_property ON "StreemLyne_MT"."property_expenses" ("tenant_id", "property_id");
+CREATE INDEX IF NOT EXISTS idx_Property_Expenses_tenant ON "StreemLyne_MT"."Property_Expenses" ("tenant_id");
+CREATE INDEX IF NOT EXISTS idx_Property_Expenses_t_property ON "StreemLyne_MT"."Property_Expenses" ("tenant_id", "property_id");
 
 CREATE TABLE IF NOT EXISTS "StreemLyne_MT"."property_images" (
   "image_id"       BIGSERIAL PRIMARY KEY,

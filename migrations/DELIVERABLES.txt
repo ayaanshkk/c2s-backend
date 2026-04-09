@@ -12,7 +12,7 @@ MULTITENANT STABILIZATION — DELIVERABLE SUMMARY (C2S Backend)
 2) NEW TABLES
    - StreemLyne_MT.property_interactions — property-scoped activity (replaces use of
      Client_Interactions in application code)
-   - StreemLyne_MT.rent_agreements, property_expenses, property_images
+   - StreemLyne_MT.rent_agreements, Property_Expenses, property_images
 
 3) RLS (see migrations/002_rls_policies.sql)
    - Commented templates using (auth.jwt() ->> 'tenant_id')::integer
