@@ -100,15 +100,25 @@ class PropertyRepository:
     ):
         """Insert property using EXACT column order from schema."""
         try:
-            # ✅ Ensure occupancy_status has a default value
+            display_id_query = f'''
+                SELECT COALESCE(MAX(display_id), 0) + 1 as next_id
+                FROM "{self.schema}"."Property_Master"
+                WHERE tenant_id = %s AND is_deleted = FALSE
+            '''
+            
+            result = self.supabase.execute_query(display_id_query, (tenant_id,), fetch_one=True)
+            next_display_id = result['next_id'] if result else 1
+            
+            self.logger.info(f"🔢 Next display_id for tenant {tenant_id}: {next_display_id}")
+            
             occupancy_status = data.get('occupancy_status', 'Vacant')
             if not occupancy_status or str(occupancy_status).strip() == '':
                 occupancy_status = 'Vacant'
             
-            # ✅ INSERT with columns that exist in the EXACT schema
             query = f'''
                 INSERT INTO "{self.schema}"."Property_Master" (
                     tenant_id,
+                    next_display_id,
                     property_name,
                     address,
                     city,
@@ -155,7 +165,8 @@ class PropertyRepository:
             '''
 
             params = (
-                tenant_id,                             
+                tenant_id,
+                next_display_id,                             
                 data.get("property_name"),              
                 data.get("address"),                    
                 data.get("city", ""),                   
@@ -310,7 +321,7 @@ class PropertyRepository:
     def delete_property(
         self, property_id: int, deleted_by: int, tenant_id: str
     ) -> bool:
-        """Soft-delete property within tenant."""
+        """Soft-delete property within tenant and resequence display_ids."""
         try:
             now = datetime.utcnow().isoformat()
 
@@ -321,13 +332,19 @@ class PropertyRepository:
                     deleted_by = %s,
                     updated_at = %s
                 WHERE property_id = %s
-                  AND tenant_id = %s
+                AND tenant_id = %s
             '''
 
             rows = self.supabase.execute_update(
                 query, (now, deleted_by, now, property_id, tenant_id)
             )
-            return rows > 0
+            
+            if rows > 0:
+                # ✅ Resequence display_ids after deletion
+                self.resequence_display_ids(tenant_id)
+                return True
+            
+            return False
 
         except Exception as e:
             self.logger.error(f"Error deleting property {property_id}: {str(e)}")
@@ -385,3 +402,28 @@ class PropertyRepository:
                 f"Error fetching properties for agent {agent_id}: {str(e)}"
             )
             return []
+
+    def resequence_display_ids(self, tenant_id: str) -> bool:
+        """Resequence display_ids after deletion to fill gaps"""
+        try:
+            query = f'''
+                WITH numbered AS (
+                    SELECT 
+                        property_id,
+                        ROW_NUMBER() OVER (ORDER BY display_id, property_id) as new_display_id
+                    FROM "{self.schema}"."Property_Master"
+                    WHERE tenant_id = %s AND is_deleted = FALSE
+                )
+                UPDATE "{self.schema}"."Property_Master" pm
+                SET display_id = numbered.new_display_id
+                FROM numbered
+                WHERE pm.property_id = numbered.property_id
+            '''
+            
+            self.supabase.execute_update(query, (tenant_id,))
+            self.logger.info(f"✅ Resequenced display_ids for tenant {tenant_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error resequencing display_ids: {str(e)}")
+            return False

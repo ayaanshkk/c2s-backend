@@ -106,7 +106,7 @@ def create_app():
         auth_routes, db_routes,
         notification_routes, dashboard_routes,
         document_routes, calendar_routes,
-        property_interactions_routes, tenant_routes,
+        property_interactions_routes, tenant_routes, property_expense_routes,
     )
 
     app.register_blueprint(auth_routes.auth_bp, url_prefix='/auth')
@@ -117,6 +117,7 @@ def create_app():
     app.register_blueprint(document_routes.document_bp)
     app.register_blueprint(calendar_routes.calendar_bp)
     app.register_blueprint(property_interactions_routes.interaction_bp)
+    app.register_blueprint(property_expense_routes.property_expense_bp, url_prefix='/api/properties')
 
     logging.info("✅ CRM Blueprints registered")
 

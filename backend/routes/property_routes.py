@@ -99,6 +99,7 @@ def get_properties():
         query = text('''
             SELECT 
                 p.property_id,
+                p.display_id,
                 p.tenant_id,
                 p.property_name,
                 p.property_type,
@@ -143,7 +144,7 @@ def get_properties():
                 ON p.assigned_agent_id = em.employee_id AND p.tenant_id = em.tenant_id
             WHERE p.tenant_id = :tenant_id
             AND p.is_deleted = FALSE
-            ORDER BY p.property_id DESC
+            ORDER BY p.display_id ASC
         ''')
         
         result = session.execute(query, {'tenant_id': tenant_id})
@@ -156,14 +157,16 @@ def get_properties():
             'properties': properties,
             'count': len(properties)
         }), 200
-        
+    
     except Exception as e:
-        logger.exception("❌ Error fetching properties")
+        logger.error(f"❌ Error fetching properties: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': 'Failed to fetch properties',
-            'message': str(e)
+            'error': str(e)
         }), 500
+    
     finally:
         session.close()
 
