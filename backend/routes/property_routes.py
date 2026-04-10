@@ -202,24 +202,15 @@ def get_property(property_id):
             'success': False,
             'error': str(e)
         }), 500
-
+    
 @property_bp.route('/', methods=['POST', 'OPTIONS'])
 @token_required
-def create_property():  
-    """Create new property"""
+def create_property():
+    """Create a new property"""
     if request.method == 'OPTIONS':
         return '', 204
         
     try:
-        data = request.get_json()
-        logger.info(f"📥 Received data: {data}")
-        
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-
         tenant_id = get_current_tenant_id()
         if not tenant_id:
             return jsonify({
@@ -227,55 +218,34 @@ def create_property():
                 'error': 'Invalid tenant context'
             }), 403
         
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        # Get current user's employee_id
         current_user = g.user
-        logger.info(f"👤 Current user employee_id: {current_user.employee_id}")
+        employee_id = current_user.employee_id
         
+        # Use PropertyService to create the property
         service = PropertyService()
-        logger.info("🔧 Calling service.create_property...")
+        new_property = service.create_property(data, employee_id, tenant_id)
         
-        property_data = service.create_property(
-            data, current_user.employee_id, tenant_id
-        )
-        
-        logger.info(f"📊 Property data type: {type(property_data)}")
-        logger.info(f"📊 Property data value: {property_data}")
-        
-        if property_data is None:
-            logger.error("❌ Property data is None!")
-            return jsonify({
-                'success': False,
-                'error': 'Failed to create property'
-            }), 500
-        
-        if isinstance(property_data, int):
-            logger.error(f"❌ Property data is an int: {property_data}")
-            return jsonify({
-                'success': False,
-                'error': 'Property created but failed to retrieve details'
-            }), 500
-        
-        if not isinstance(property_data, dict):
-            logger.error(f"❌ Property data is not a dict: {type(property_data)}")
-            return jsonify({
-                'success': False,
-                'error': f'Unexpected return type: {type(property_data)}'
-            }), 500
-        
-        logger.info("✅ Property created successfully!")
+        logger.info(f"✅ Property created: {new_property.get('property_id')} for tenant {tenant_id}")
         
         return jsonify({
             'success': True,
-            'property': property_data,
+            'property': new_property,
             'message': 'Property created successfully'
         }), 201
-
-    except PermissionError as e:
-        return jsonify({'success': False, 'error': str(e)}), 403
         
     except Exception as e:
         logger.error(f"❌ Error creating property: {str(e)}")
         import traceback
-        logger.error(f"📋 Full traceback:\n{traceback.format_exc()}")
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -284,18 +254,11 @@ def create_property():
 @property_bp.route('/<int:property_id>', methods=['PUT', 'OPTIONS'])
 @token_required
 def update_property(property_id):
-    """Update property"""
+    """Update a property"""
     if request.method == 'OPTIONS':
         return '', 204
         
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-
         tenant_id = get_current_tenant_id()
         if not tenant_id:
             return jsonify({
@@ -303,20 +266,30 @@ def update_property(property_id):
                 'error': 'Invalid tenant context'
             }), 403
         
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        # Use PropertyService to update the property
         service = PropertyService()
-        property_data = service.update_property(property_id, tenant_id, data)
+        updated_property = service.update_property(property_id, tenant_id, data)
+        
+        logger.info(f"✅ Property updated: {property_id} for tenant {tenant_id}")
         
         return jsonify({
             'success': True,
-            'property': property_data,
+            'property': updated_property,
             'message': 'Property updated successfully'
         }), 200
-
-    except PermissionError as e:
-        return jsonify({'success': False, 'error': str(e)}), 403
         
     except Exception as e:
-        logger.error(f"Error updating property: {str(e)}")
+        logger.error(f"❌ Error updating property: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -971,3 +944,178 @@ def set_main_property_photo(property_id):
     except Exception as e:
         logger.error(f"Error setting main photo: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+@property_bp.route('/bulk-delete', methods=['POST', 'OPTIONS'])
+@token_required
+@require_admin
+def bulk_delete_properties():
+    """Bulk delete properties (admin only)"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    try:
+        data = request.get_json()
+        property_ids = data.get('property_ids', [])
+        
+        if not property_ids or not isinstance(property_ids, list):
+            return jsonify({
+                'success': False,
+                'error': 'property_ids array is required'
+            }), 400
+        
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+
+        current_user = g.user
+        service = PropertyService()
+        
+        deleted_count = 0
+        failed_ids = []
+        
+        for property_id in property_ids:
+            try:
+                success = service.delete_property(
+                    property_id, current_user.employee_id, tenant_id
+                )
+                if success:
+                    deleted_count += 1
+                else:
+                    failed_ids.append(property_id)
+            except Exception as e:
+                logger.error(f"Failed to delete property {property_id}: {str(e)}")
+                failed_ids.append(property_id)
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'failed_count': len(failed_ids),
+            'failed_ids': failed_ids,
+            'message': f'{deleted_count} propert{"y" if deleted_count == 1 else "ies"} deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error bulk deleting properties: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    
+@property_bp.route('/reset-sequence', methods=['POST', 'OPTIONS'])
+@token_required
+@require_admin
+def reset_property_sequence():
+    """Reset property_id sequence to continue from max existing ID (admin only)"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+
+        session = SessionLocal()
+        try:
+            # Get the maximum property_id for this tenant
+            result = session.execute(
+                text(f"""
+                    SELECT COALESCE(MAX(property_id), 0) as max_id
+                    FROM "{SCHEMA_PM}"."Property_Master"
+                    WHERE tenant_id = :tid
+                """),
+                {"tid": tenant_id}
+            ).first()
+            
+            max_id = result.max_id if result else 0
+            next_id = max_id + 1
+            
+            # Reset the sequence
+            session.execute(
+                text(f"""
+                    SELECT setval(
+                        '"{SCHEMA_PM}"."Property_Master_property_id_seq"',
+                        :next_id,
+                        false
+                    )
+                """),
+                {"next_id": next_id}
+            )
+            session.commit()
+            
+            logger.info(f"✅ Reset property sequence for tenant {tenant_id} to {next_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Property ID sequence reset to {next_id}',
+                'next_id': next_id
+            }), 200
+            
+        finally:
+            session.close()
+        
+    except Exception as e:
+        logger.error(f"Error resetting property sequence: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@property_bp.route('/fix-occupancy-status', methods=['POST', 'OPTIONS'])
+@token_required
+@require_admin
+def fix_occupancy_status():
+    """Fix occupancy_status for existing properties based on tenant_name (admin only)"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+
+        session = SessionLocal()
+        try:
+            # Update properties: if tenant_name exists -> Occupied, else -> Vacant
+            result = session.execute(
+                text(f"""
+                    UPDATE "{SCHEMA_PM}"."Property_Master"
+                    SET occupancy_status = CASE
+                        WHEN tenant_name IS NOT NULL AND tenant_name != '' THEN 'Occupied'
+                        ELSE 'Vacant'
+                    END,
+                    updated_at = :updated
+                    WHERE tenant_id = :tid AND is_deleted = FALSE
+                    RETURNING property_id, property_name, occupancy_status
+                """),
+                {"tid": tenant_id, "updated": datetime.utcnow()}
+            )
+            
+            updated_properties = result.fetchall()
+            session.commit()
+            
+            logger.info(f"✅ Fixed occupancy_status for {len(updated_properties)} properties in tenant {tenant_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Updated {len(updated_properties)} properties',
+                'updated_count': len(updated_properties)
+            }), 200
+            
+        finally:
+            session.close()
+        
+    except Exception as e:
+        logger.error(f"Error fixing occupancy status: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500

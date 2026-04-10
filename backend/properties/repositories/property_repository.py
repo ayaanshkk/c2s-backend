@@ -100,6 +100,11 @@ class PropertyRepository:
     ):
         """Insert property using EXACT column order from schema."""
         try:
+            # ✅ Ensure occupancy_status has a default value
+            occupancy_status = data.get('occupancy_status', 'Vacant')
+            if not occupancy_status or str(occupancy_status).strip() == '':
+                occupancy_status = 'Vacant'
+            
             # ✅ INSERT with columns that exist in the EXACT schema
             query = f'''
                 INSERT INTO "{self.schema}"."Property_Master" (
@@ -110,6 +115,7 @@ class PropertyRepository:
                     postcode,
                     country_id,
                     property_type,
+                    occupancy_status,
                     bedrooms,
                     bathrooms,
                     square_feet,
@@ -136,55 +142,60 @@ class PropertyRepository:
                     parking_spaces,
                     pet_friendly,
                     furnished,
-                    document_details
+                    document_details,
+                    rent_due_day
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s
                 )
                 RETURNING property_id
             '''
 
             params = (
-                tenant_id,
-                data.get("property_name"),
-                data.get("address"),
-                data.get("city", ""),
-                data.get("postal_code") or data.get("postcode", ""),
-                data.get("country_id", 1),
-                data.get("property_type", ""),
-                data.get("bedrooms", 0),
-                data.get("bathrooms", 0),
-                data.get("square_feet", 0),
-                data.get("assigned_agent_id"),
-                data.get("monthly_rent", 0),
-                data.get("purchase_price", 0),
-                data.get("currency_id", 1),
-                data.get("main_photo_url"),
-                True,  # is_active
-                False,  # is_deleted
-                status_id,
-                created_by,
-                data.get("state", ""),
-                data.get("country", "UK"),
-                data.get("deposit_amount", 0),
-                data.get("year_built"),
-                data.get("lease_start_date"),
-                data.get("lease_end_date"),
-                data.get("tenant_name"),
-                data.get("tenant_contact"),
-                data.get("tenant_email"),
-                data.get("description"),
-                data.get("amenities"),
-                data.get("parking_spaces", 0),
-                data.get("pet_friendly", False),
-                data.get("furnished", False),
-                data.get("document_details"),
+                tenant_id,                             
+                data.get("property_name"),              
+                data.get("address"),                    
+                data.get("city", ""),                   
+                data.get("postcode", ""),               
+                data.get("country_id", 1),              
+                data.get("property_type", ""),          
+                occupancy_status,                      
+                data.get("bedrooms", 0),                
+                data.get("bathrooms", 0),               
+                data.get("square_feet", 0),             
+                data.get("assigned_agent_id"),         
+                data.get("monthly_rent", 0),            
+                data.get("purchase_price", 0),          
+                data.get("currency_id", 1),           
+                data.get("main_photo_url"),             
+                True,                                   
+                False,                                  
+                status_id,                              
+                created_by,                             
+                data.get("state", ""),                  
+                data.get("country", "UK"),              
+                data.get("deposit_amount", 0),          
+                data.get("year_built"),                 
+                data.get("lease_start_date"),           
+                data.get("lease_end_date"),             
+                data.get("tenant_name"),                
+                data.get("tenant_contact"),             
+                data.get("tenant_email"),               
+                data.get("description"),                
+                data.get("amenities"),                  
+                data.get("parking_spaces", 0),          
+                data.get("pet_friendly", False),        
+                data.get("furnished", False),           
+                data.get("document_details"),           
+                data.get("rent_due_day"),               
             )
 
             self.logger.info(f"🔧 Creating property: {data.get('property_name')}")
+            self.logger.info(f"📊 Number of columns: 36, Number of params: {len(params)}")
+            
             result = self.supabase.execute_insert(query, params, returning=True)
             
             self.logger.info(f"📊 Insert result type: {type(result)}")
@@ -224,14 +235,14 @@ class PropertyRepository:
             update_fields = []
             params: List[Any] = []
 
-            # ✅ Fields that exist in actual schema
+            # ✅ Fields that exist in actual schema (INCLUDING occupancy_status and rent_due_day)
             field_mapping = {
                 "property_name": "property_name",
                 "property_type": "property_type",
+                "occupancy_status": "occupancy_status",  
                 "address": "address",
                 "city": "city",
                 "state": "state",
-                "postal_code": "postcode",
                 "postcode": "postcode",
                 "country": "country",
                 "country_id": "country_id",
@@ -239,6 +250,7 @@ class PropertyRepository:
                 "monthly_rent": "monthly_rent",
                 "purchase_price": "purchase_price",
                 "deposit_amount": "deposit_amount",
+                "rent_due_day": "rent_due_day",  
                 "currency_id": "currency_id",
                 "bedrooms": "bedrooms",
                 "bathrooms": "bathrooms",
@@ -259,7 +271,14 @@ class PropertyRepository:
                 "furnished": "furnished",
                 "document_details": "document_details",
                 "is_active": "is_active",
+                "photo_urls": "photo_urls",  
             }
+
+            # ✅ Special handling for occupancy_status to ensure it's never empty
+            if "occupancy_status" in data:
+                occupancy_status = data["occupancy_status"]
+                if not occupancy_status or str(occupancy_status).strip() == '':
+                    data["occupancy_status"] = "Vacant"
 
             for key, db_field in field_mapping.items():
                 if key in data:
@@ -277,8 +296,8 @@ class PropertyRepository:
                 UPDATE "{self.schema}"."Property_Master"
                 SET {', '.join(update_fields)}
                 WHERE property_id = %s
-                  AND tenant_id = %s
-                  AND is_deleted = FALSE
+                AND tenant_id = %s
+                AND is_deleted = FALSE
             '''
 
             self.supabase.execute_update(query, tuple(params))
