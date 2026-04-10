@@ -6,7 +6,8 @@ Handles database operations for User_Master table (Property Management Users)
 import os
 import logging
 from typing import Optional, Dict, Any, List
-from backend.properties.supabase_client import supabase  # ✅ Import supabase directly
+from backend.properties.supabase_client import supabase  
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -196,82 +197,232 @@ class UserRepository:
             return None
     
     def get_all_agents(self, tenant_id: str):
-        """Get property agents for one tenant (Employee_Master)."""
+        """Get only employees with role_id = 3 (Agent) for this tenant."""
         try:
-            query = f'''
-                SELECT 
+            rows = self.supabase.execute_query(
+                f'''
+                SELECT
                     em.employee_id,
                     em.employee_name,
                     em.email,
-                    em.phone
+                    em.phone,
+                    em.commission_percentage,
+                    dm.designation_description          AS designation,
+                    um.user_id,
+                    um.is_invite_pending,
+                    COALESCE(
+                        json_agg(rm.role_name) FILTER (WHERE rm.role_name IS NOT NULL),
+                        '[]'::json
+                    )                                   AS roles
                 FROM "{self.schema}"."Employee_Master" em
+                LEFT JOIN "{self.schema}"."Designation_Master" dm
+                    ON dm.designation_id = em.employee_designation_id
+                LEFT JOIN "{self.schema}"."User_Master" um
+                    ON um.employee_id = em.employee_id
+                LEFT JOIN "{self.schema}"."User_Role_Mapping" urm
+                    ON urm.user_id = um.user_id
+                LEFT JOIN "{self.schema}"."Role_Master" rm
+                    ON rm.role_id = urm.role_id
                 WHERE em.tenant_id = %s
+                GROUP BY
+                    em.employee_id, em.employee_name, em.email, em.phone,
+                    em.commission_percentage, dm.designation_description,
+                    um.user_id, um.is_invite_pending
+                HAVING bool_or(urm.role_id = 3)
                 ORDER BY em.employee_name
-            '''
-
-            result = self.supabase.execute_query(query, (tenant_id,))
-
-            if result:
-                return result
-            return []
-
+                ''',
+                (tenant_id,),
+            )
+            return rows or []
         except Exception as e:
-            self.logger.error(f"Error fetching all agents: {str(e)}")
+            self.logger.error("Error fetching all agents: %s", e)
             return []
+
 
     def get_agent_by_id(self, agent_id: int, tenant_id: str):
-        """Get agent by ID scoped to tenant."""
+        """Get single agent by ID scoped to tenant, with user and role info."""
         try:
-            query = f'''
-                SELECT 
+            rows = self.supabase.execute_query(
+                f'''
+                SELECT
                     em.employee_id,
                     em.employee_name,
                     em.email,
-                    em.phone
+                    em.phone,
+                    em.commission_percentage,
+                    em.date_of_joining,
+                    em.date_of_birth,
+                    em.id_type,
+                    em.id_number,
+                    dm.designation_description          AS designation,
+                    um.user_id,
+                    um.is_invite_pending,
+                    COALESCE(
+                        json_agg(rm.role_name) FILTER (WHERE rm.role_name IS NOT NULL),
+                        '[]'::json
+                    )                                   AS roles
                 FROM "{self.schema}"."Employee_Master" em
-                WHERE em.employee_id = %s
-                  AND em.tenant_id = %s
-            '''
-            
-            # ✅ REMOVED: AND em.is_active = TRUE (column doesn't exist)
-            
-            result = self.supabase.execute_query(
-                query, (agent_id, tenant_id), fetch_one=True
+                LEFT JOIN "{self.schema}"."Designation_Master" dm
+                    ON dm.designation_id = em.employee_designation_id
+                LEFT JOIN "{self.schema}"."User_Master" um
+                    ON um.employee_id = em.employee_id
+                LEFT JOIN "{self.schema}"."User_Role_Mapping" urm
+                    ON urm.user_id = um.user_id
+                LEFT JOIN "{self.schema}"."Role_Master" rm
+                    ON rm.role_id = urm.role_id
+                WHERE em.tenant_id = %s
+                AND em.employee_id = %s
+                GROUP BY
+                    em.employee_id, em.employee_name, em.email, em.phone,
+                    em.commission_percentage, em.date_of_joining, em.date_of_birth,
+                    em.id_type, em.id_number, dm.designation_description,
+                    um.user_id, um.is_invite_pending
+                ''',
+                (tenant_id, agent_id),
             )
-            
-            if result:
-                return result
-            return None
-            
+            return rows[0] if rows else None
         except Exception as e:
-            self.logger.error(f"Error fetching agent {agent_id}: {str(e)}")
+            self.logger.error("Error fetching agent %s: %s", agent_id, e)
             return None
 
     def create_employee_agent(
-        self, tenant_id: str, employee_name: str, email: str, phone: str = None
+        self, tenant_id: str, employee_name: str, email: str = None, phone: str = None
     ) -> Optional[Dict[str, Any]]:
-        """Insert Employee_Master row for this tenant (property agent directory)."""
-        if not tenant_id or not employee_name or not email:
+        if not tenant_id or not employee_name or not phone:
             return None
+
+        AGENT_ROLE_ID = 3
+
         try:
-            query = f'''
-                INSERT INTO "{self.schema}"."Employee_Master" (
-                    tenant_id, employee_name, email, phone
-                )
+            emp = self.supabase.execute_insert(
+                f'''
+                INSERT INTO "{self.schema}"."Employee_Master"
+                    (tenant_id, employee_name, email, phone)
                 VALUES (%s, %s, %s, %s)
                 RETURNING employee_id, employee_name, email, phone
-            '''
-            result = self.supabase.execute_insert(
-                query,
-                (tenant_id, employee_name.strip(), email.strip(), phone or None),
+                ''',
+                (tenant_id, employee_name.strip(), email.strip() if email else None, phone.strip()),
                 returning=True,
             )
-            if isinstance(result, dict) and result.get("employee_id") is not None:
-                return result
-            return None
+
+            if not emp or not emp.get("employee_id"):
+                self.logger.error("Employee_Master insert returned no row")
+                return None
+
+            employee_id = emp["employee_id"]
+            self.logger.info("Created employee_id=%s", employee_id)
+
+            username = email.strip() if email and email.strip() else phone.strip()
+            user = self.supabase.execute_insert(
+                f'''
+                INSERT INTO "{self.schema}"."User_Master"
+                    (employee_id, user_name, is_invite_pending)
+                VALUES (%s, %s, TRUE)
+                RETURNING user_id
+                ''',
+                (employee_id, username),
+                returning=True,
+            )
+
+            if not user or not user.get("user_id"):
+                self.logger.warning("User_Master insert returned no row for employee_id=%s", employee_id)
+                return emp
+
+            user_id = user["user_id"]
+            self.logger.info("Created user_id=%s", user_id)
+
+            self.supabase.execute_insert(
+                f'''
+                INSERT INTO "{self.schema}"."User_Role_Mapping" (user_id, role_id)
+                VALUES (%s, %s)
+                ON CONFLICT DO NOTHING
+                ''',
+                (user_id, AGENT_ROLE_ID),
+                returning=False,
+            )
+
+            invite_token = self.generate_invite_for_user(user_id)
+            self.logger.info("Generated invite token for user_id=%s", user_id)
+
+            return {
+                **emp,
+                "user_id": user_id,
+                "is_invite_pending": True,
+                "invite_token": invite_token,
+            }
+
         except Exception as e:
             self.logger.error("create_employee_agent failed: %s", e)
             raise
+
+
+    def generate_invite_for_user(self, user_id: int) -> Optional[str]:
+        """Generate and store a unique invite token for a user."""
+        token = secrets.token_urlsafe(32)
+        result = self.supabase.execute_update(
+            f'''
+            UPDATE "{self.schema}"."User_Master"
+            SET invite_token = %s, is_invite_pending = TRUE
+            WHERE user_id = %s
+            ''',
+            (token, user_id),
+        )
+        return token if result else None
+
+
+    def get_user_by_invite_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Get user details by invite token (for accept-invite page)."""
+        rows = self.supabase.execute_query(
+            f'''
+            SELECT
+                um.user_id,
+                um.user_name,
+                um.is_invite_pending,
+                em.employee_name,
+                em.email       AS employee_email,
+                rm.role_name
+            FROM "{self.schema}"."User_Master" um
+            LEFT JOIN "{self.schema}"."Employee_Master" em
+                ON em.employee_id = um.employee_id
+            LEFT JOIN "{self.schema}"."User_Role_Mapping" urm
+                ON urm.user_id = um.user_id
+            LEFT JOIN "{self.schema}"."Role_Master" rm
+                ON rm.role_id = urm.role_id
+            WHERE um.invite_token = %s
+            AND um.is_invite_pending = TRUE
+            LIMIT 1
+            ''',
+            (token,),
+        )
+        return rows[0] if rows else None
+
+
+    def delete_agent(self, agent_id: int, tenant_id: str) -> None:
+        """Delete agent and all associated user/role records."""
+        # Delete role mappings first
+        self.supabase.execute_delete(
+            f'''
+            DELETE FROM "{self.schema}"."User_Role_Mapping"
+            WHERE user_id IN (
+                SELECT user_id FROM "{self.schema}"."User_Master"
+                WHERE employee_id = %s
+            )
+            ''',
+            (agent_id,),
+        )
+        # Delete user account
+        self.supabase.execute_delete(
+            f'DELETE FROM "{self.schema}"."User_Master" WHERE employee_id = %s',
+            (agent_id,),
+        )
+        # Delete employee record (tenant-scoped)
+        self.supabase.execute_delete(
+            f'''
+            DELETE FROM "{self.schema}"."Employee_Master"
+            WHERE employee_id = %s AND tenant_id = %s
+            ''',
+            (agent_id, tenant_id),
+        )
 
     def employee_belongs_to_tenant(self, employee_id: int, tenant_id: str) -> bool:
         """True if employee_id exists in Employee_Master for this tenant (string slug)."""

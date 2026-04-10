@@ -11,7 +11,7 @@ agent_bp = Blueprint('agents', __name__)
 
 @agent_bp.route('/', methods=['GET', 'OPTIONS'])
 @token_required
-def get_agents():  # ✅ NO current_user parameter
+def get_agents():
     """Get all property agents from Employee_Master"""
     if request.method == 'OPTIONS':
         return '', 204
@@ -40,9 +40,10 @@ def get_agents():  # ✅ NO current_user parameter
             'error': str(e)
         }), 500
 
+
 @agent_bp.route('/<int:agent_id>', methods=['GET', 'OPTIONS'])
 @token_required
-def get_agent(agent_id):  # ✅ NO current_user parameter
+def get_agent(agent_id):
     """Get single agent by ID"""
     if request.method == 'OPTIONS':
         return '', 204
@@ -77,9 +78,10 @@ def get_agent(agent_id):  # ✅ NO current_user parameter
             'error': str(e)
         }), 500
 
+
 @agent_bp.route('/<int:agent_id>/properties', methods=['GET', 'OPTIONS'])
 @token_required
-def get_agent_properties(agent_id):  # ✅ NO current_user parameter
+def get_agent_properties(agent_id):
     """Get all properties assigned to this agent"""
     if request.method == 'OPTIONS':
         return '', 204
@@ -114,9 +116,10 @@ def get_agent_properties(agent_id):  # ✅ NO current_user parameter
             'error': str(e)
         }), 500
 
+
 @agent_bp.route('/<int:agent_id>/stats', methods=['GET', 'OPTIONS'])
 @token_required
-def get_agent_stats(agent_id):  # ✅ NO current_user parameter
+def get_agent_stats(agent_id):
     """Get statistics for specific agent"""
     if request.method == 'OPTIONS':
         return '', 204
@@ -135,15 +138,12 @@ def get_agent_stats(agent_id):  # ✅ NO current_user parameter
         service = PropertyService()
         properties = service.get_properties_by_agent(agent_id, tenant_id)
 
-        # Calculate stats
         total_properties = len(properties) if properties else 0
         available = sum(1 for p in properties if p.get('status_name', '').lower() == 'available') if properties else 0
         occupied = sum(1 for p in properties if p.get('status_name', '').lower() == 'occupied') if properties else 0
         maintenance = sum(1 for p in properties if p.get('status_name', '').lower() == 'under maintenance') if properties else 0
-        
-        # Calculate total monthly income
         total_income = sum(p.get('monthly_rent', 0) or 0 for p in properties if p.get('status_name', '').lower() == 'occupied') if properties else 0
-        
+
         stats = {
             'agent_id': agent_id,
             'total_properties': total_properties,
@@ -188,15 +188,15 @@ def create_agent():
 
         data = request.get_json() or {}
         name = (data.get('employee_name') or data.get('name') or '').strip()
-        email = (data.get('email') or '').strip()
-        phone = (data.get('phone') or '').strip() or None
+        email = (data.get('email') or '').strip() or None
+        phone = (data.get('phone') or '').strip()
 
         if not name:
             return jsonify({'success': False, 'error': 'employee_name is required'}), 400
-        if not email:
-            return jsonify({'success': False, 'error': 'email is required'}), 400
+        if not phone:
+            return jsonify({'success': False, 'error': 'phone is required'}), 400
 
-        repo = UserRepository()
+        repo = UserRepository()  # ✅ was missing — caused NameError
         row = repo.create_employee_agent(tenant_id, name, email, phone)
         if not row:
             return jsonify({'success': False, 'error': 'Could not create agent'}), 500
@@ -212,7 +212,31 @@ def create_agent():
         if 'unique' in err or 'duplicate' in err:
             return jsonify({
                 'success': False,
-                'error': 'An employee with this email may already exist',
+                'error': 'An agent with this phone number or email already exists',
             }), 409
         logger.error('Error creating agent: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@agent_bp.route('/<int:agent_id>', methods=['DELETE', 'OPTIONS'])
+@token_required
+def delete_agent(agent_id):
+    """Delete agent and associated user/role records."""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+            }), 403
+
+        repo = UserRepository()
+        repo.delete_agent(agent_id, tenant_id)
+        return jsonify({'success': True, 'message': 'Agent deleted successfully'}), 200
+
+    except Exception as e:
+        logger.error('Error deleting agent %s: %s', agent_id, e)
         return jsonify({'success': False, 'error': str(e)}), 500

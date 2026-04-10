@@ -19,6 +19,8 @@ import secrets
 import re
 import jwt
 import logging
+import bcrypt
+
 
 from backend.db import SessionLocal
 
@@ -433,4 +435,71 @@ def refresh_token():
         
     except Exception as e:
         logger.exception(f"Error refreshing token: {e}")
+        return jsonify({'error': str(e)}), 500
+    
+@auth_bp.route('/invite/validate/<token>', methods=['GET', 'OPTIONS'])
+def validate_invite(token):
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        from backend.properties.repositories.user_repository import UserRepository
+        repo = UserRepository()
+        user = repo.get_user_by_invite_token(token)
+        if not user:
+            return jsonify({'valid': False, 'error': 'Invalid or expired invite link'}), 404
+        return jsonify({
+            'valid': True,
+            'employee_name': user.get('employee_name'),
+            'username': user.get('user_name'),
+            'email': user.get('employee_email'),
+            'role': user.get('role_name', 'Agent'),
+        }), 200
+    except Exception as e:
+        return jsonify({'valid': False, 'error': str(e)}), 500
+
+
+@auth_bp.route('/invite/accept', methods=['POST', 'OPTIONS'])
+def accept_invite():
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        from backend.properties.repositories.user_repository import UserRepository
+        import bcrypt
+
+        repo = UserRepository()
+        data = request.get_json() or {}
+        token = data.get('token', '').strip()
+        password = data.get('password', '').strip()
+        username = data.get('username', '').strip()
+
+        if not token or not password:
+            return jsonify({'error': 'token and password are required'}), 400
+        if len(password) < 6:
+            return jsonify({'error': 'Password must be at least 6 characters'}), 400
+
+        user = repo.get_user_by_invite_token(token)
+        if not user:
+            return jsonify({'error': 'Invalid or expired invite link'}), 404
+
+        # Check username uniqueness if agent chose a different one
+        if username and username != user.get('user_name'):
+            existing = repo.get_user_by_username(username)
+            if existing:
+                return jsonify({'error': 'Username already taken, please choose another'}), 409
+
+        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        repo.supabase.execute_update(
+            '''
+            UPDATE "StreemLyne_MT"."User_Master"
+            SET password = %s,
+                user_name = COALESCE(NULLIF(%s, ''), user_name),
+                is_invite_pending = FALSE,
+                invite_token = NULL
+            WHERE invite_token = %s
+            ''',
+            (hashed, username or None, token),
+        )
+        return jsonify({'success': True, 'message': 'Account activated successfully'}), 200
+
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
