@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request, g
 from backend.routes.auth_helpers import token_required, get_current_tenant_id
 from backend.properties.repositories.user_repository import UserRepository
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -196,14 +197,25 @@ def create_agent():
         if not phone:
             return jsonify({'success': False, 'error': 'phone is required'}), 400
 
-        repo = UserRepository()  # ✅ was missing — caused NameError
+        repo = UserRepository()
         row = repo.create_employee_agent(tenant_id, name, email, phone)
         if not row:
             return jsonify({'success': False, 'error': 'Could not create agent'}), 500
 
+        # Extract invite token and build link
+        invite_token = row.pop("invite_token", None)  # remove from agent payload
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        invite_link = (
+            f"{frontend_url}/accept-invite?token={invite_token}"
+            if invite_token else None
+        )
+
+        logger.info("Agent created — invite_token=%s invite_link=%s", invite_token, invite_link)
+
         return jsonify({
             'success': True,
             'agent': row,
+            'invite_link': invite_link,
             'message': 'Agent created successfully',
         }), 201
 

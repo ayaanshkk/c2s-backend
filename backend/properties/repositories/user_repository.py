@@ -177,23 +177,28 @@ class UserRepository:
         Returns:
             User record or None
         """
-        query = """
-            SELECT
-                um.*,
-                em."employee_name",
-                em."tenant_id",
-                em."email" as "employee_email"
-            FROM "StreemLyne_MT"."User_Master" um
-            LEFT JOIN "StreemLyne_MT"."Employee_Master" em 
-                ON um."employee_id" = em."employee_id"
-            WHERE LOWER(um."user_name") = LOWER(%s)
-            LIMIT 1
-        """
-        
         try:
-            return self.db.execute_query(query, (username,), fetch_one=True)
+            rows = self.supabase.execute_query(
+                f'''
+                SELECT
+                    um.user_id,
+                    um.user_name,
+                    um.password,
+                    um.employee_id,
+                    em.employee_name,
+                    em.tenant_id,
+                    em.email as employee_email
+                FROM "{self.schema}"."User_Master" um
+                LEFT JOIN "{self.schema}"."Employee_Master" em 
+                    ON um.employee_id = em.employee_id
+                WHERE LOWER(um.user_name) = LOWER(%s)
+                LIMIT 1
+                ''',
+                (username,),
+            )
+            return rows[0] if rows else None
         except Exception as e:
-            logger.error(f"Error fetching user by username: {e}")
+            self.logger.error(f"Error fetching user by username: {e}")
             return None
     
     def get_all_agents(self, tenant_id: str):
@@ -288,12 +293,14 @@ class UserRepository:
     def create_employee_agent(
         self, tenant_id: str, employee_name: str, email: str = None, phone: str = None
     ) -> Optional[Dict[str, Any]]:
+        """Create employee and user with invite pending (NO username/password set yet)"""
         if not tenant_id or not employee_name or not phone:
             return None
 
         AGENT_ROLE_ID = 3
 
         try:
+            # Create employee record
             emp = self.supabase.execute_insert(
                 f'''
                 INSERT INTO "{self.schema}"."Employee_Master"
@@ -312,15 +319,18 @@ class UserRepository:
             employee_id = emp["employee_id"]
             self.logger.info("Created employee_id=%s", employee_id)
 
-            username = email.strip() if email and email.strip() else phone.strip()
+            # Generate invite token
+            invite_token = secrets.token_urlsafe(32)
+
+            # Create user record WITHOUT username/password (will be set when invite is accepted)
             user = self.supabase.execute_insert(
                 f'''
                 INSERT INTO "{self.schema}"."User_Master"
-                    (employee_id, user_name, is_invite_pending)
-                VALUES (%s, %s, TRUE)
+                    (employee_id, user_name, password, is_invite_pending, invite_token)
+                VALUES (%s, NULL, NULL, TRUE, %s)
                 RETURNING user_id
                 ''',
-                (employee_id, username),
+                (employee_id, invite_token),
                 returning=True,
             )
 
@@ -329,8 +339,9 @@ class UserRepository:
                 return emp
 
             user_id = user["user_id"]
-            self.logger.info("Created user_id=%s", user_id)
+            self.logger.info("Created user_id=%s with invite_token", user_id)
 
+            # Assign Agent role
             self.supabase.execute_insert(
                 f'''
                 INSERT INTO "{self.schema}"."User_Role_Mapping" (user_id, role_id)
@@ -340,9 +351,6 @@ class UserRepository:
                 (user_id, AGENT_ROLE_ID),
                 returning=False,
             )
-
-            invite_token = self.generate_invite_for_user(user_id)
-            self.logger.info("Generated invite token for user_id=%s", user_id)
 
             return {
                 **emp,
@@ -354,6 +362,28 @@ class UserRepository:
         except Exception as e:
             self.logger.error("create_employee_agent failed: %s", e)
             raise
+
+
+    def complete_invite_acceptance(self, user_id: int, username: str, password: str) -> bool:
+        """Complete invite acceptance by setting username and password"""
+        try:
+            result = self.supabase.execute_update(
+                f'''
+                UPDATE "{self.schema}"."User_Master"
+                SET 
+                    user_name = %s,
+                    password = %s,
+                    is_invite_pending = FALSE,
+                    invite_token = NULL
+                WHERE user_id = %s
+                AND is_invite_pending = TRUE
+                ''',
+                (username, password, user_id),
+            )
+            return result is not None
+        except Exception as e:
+            self.logger.error("complete_invite_acceptance failed: %s", e)
+            return False
 
 
     def generate_invite_for_user(self, user_id: int) -> Optional[str]:
@@ -380,6 +410,7 @@ class UserRepository:
                 um.is_invite_pending,
                 em.employee_name,
                 em.email       AS employee_email,
+                em.phone       AS employee_phone,
                 rm.role_name
             FROM "{self.schema}"."User_Master" um
             LEFT JOIN "{self.schema}"."Employee_Master" em

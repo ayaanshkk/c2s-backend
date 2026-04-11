@@ -458,48 +458,116 @@ def validate_invite(token):
         return jsonify({'valid': False, 'error': str(e)}), 500
 
 
-@auth_bp.route('/invite/accept', methods=['POST', 'OPTIONS'])
-def accept_invite():
+@auth_bp.route('/verify-invite/<token>', methods=['GET', 'OPTIONS'])
+def verify_invite_token(token):
+    """Verify if invite token is valid and get agent details"""
     if request.method == 'OPTIONS':
         return '', 204
+        
     try:
         from backend.properties.repositories.user_repository import UserRepository
-        import bcrypt
-
+        
         repo = UserRepository()
-        data = request.get_json() or {}
-        token = data.get('token', '').strip()
-        password = data.get('password', '').strip()
-        username = data.get('username', '').strip()
-
-        if not token or not password:
-            return jsonify({'error': 'token and password are required'}), 400
-        if len(password) < 6:
-            return jsonify({'error': 'Password must be at least 6 characters'}), 400
-
-        user = repo.get_user_by_invite_token(token)
-        if not user:
-            return jsonify({'error': 'Invalid or expired invite link'}), 404
-
-        # Check username uniqueness if agent chose a different one
-        if username and username != user.get('user_name'):
-            existing = repo.get_user_by_username(username)
-            if existing:
-                return jsonify({'error': 'Username already taken, please choose another'}), 409
-
-        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        repo.supabase.execute_update(
-            '''
-            UPDATE "StreemLyne_MT"."User_Master"
-            SET password = %s,
-                user_name = COALESCE(NULLIF(%s, ''), user_name),
-                is_invite_pending = FALSE,
-                invite_token = NULL
-            WHERE invite_token = %s
-            ''',
-            (hashed, username or None, token),
-        )
-        return jsonify({'success': True, 'message': 'Account activated successfully'}), 200
-
+        user_data = repo.get_user_by_invite_token(token)
+        
+        if not user_data:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid or expired invite token'
+            }), 404
+        
+        return jsonify({
+            'success': True,
+            'agent': {
+                'employee_name': user_data.get('employee_name', 'Agent'),
+                'email': user_data.get('employee_email'),
+                'phone': user_data.get('employee_phone'),
+                'role': user_data.get('role_name', 'Agent'),
+            }
+        }), 200
+        
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"❌ Error verifying invite token: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@auth_bp.route('/accept-invite', methods=['POST', 'OPTIONS'])
+def accept_invite():
+    """Accept invite and set username/password"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    try:
+        from backend.properties.repositories.user_repository import UserRepository
+        
+        data = request.get_json()
+        token = data.get('token', '').strip()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        
+        if not all([token, username, password]):
+            return jsonify({
+                'success': False,
+                'error': 'Token, username, and password are required'
+            }), 400
+        
+        if len(username) < 3:
+            return jsonify({
+                'success': False,
+                'error': 'Username must be at least 3 characters'
+            }), 400
+            
+        if len(password) < 6:
+            return jsonify({
+                'success': False,
+                'error': 'Password must be at least 6 characters'
+            }), 400
+        
+        repo = UserRepository()
+        
+        # Get user by invite token
+        user_data = repo.get_user_by_invite_token(token)
+        
+        if not user_data:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid or expired invite token'
+            }), 404
+        
+        user_id = user_data.get('user_id')
+        
+        # Check if username is already taken (but not by this user)
+        existing = repo.get_user_by_username(username)
+        
+        if existing and existing.get('user_id') != user_id:
+            return jsonify({
+                'success': False,
+                'error': 'Username already taken. Please choose another.'
+            }), 409
+        
+        # Update user with new credentials
+        success = repo.complete_invite_acceptance(user_id, username, password)
+        
+        if not success:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to activate account'
+            }), 500
+        
+        logger.info(f"✅ Invite accepted for {username} (user_id: {user_id})")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Account activated successfully. You can now login.',
+            'username': username
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ Error accepting invite: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
