@@ -118,7 +118,7 @@ class PropertyRepository:
             query = f'''
                 INSERT INTO "{self.schema}"."Property_Master" (
                     tenant_id,
-                    next_display_id,
+                    display_id,
                     property_name,
                     address,
                     city,
