@@ -85,10 +85,7 @@ def create_app():
     # ============================================
     CORS(
         app,
-        origins=[
-            "https://c2s-investments.vercel.app",
-            "http://localhost:3000",
-        ],
+        origins="*",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Content-Type",
@@ -101,6 +98,15 @@ def create_app():
         max_age=3600,
         automatic_options=True
     )
+
+    @app.after_request
+    def add_cors_headers(response):
+        """Ensure CORS headers are always present"""
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, X-Tenant-ID'
+        response.headers['Access-Control-Max-Age'] = '3600'
+        return response
 
     # ============================================
     # BLUEPRINTS - CRM SYSTEM
