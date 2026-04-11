@@ -214,13 +214,12 @@ def create_app():
 
     return app
 
+app = create_app()
 
 # ============================================
 # STANDALONE LAUNCH
 # ============================================
 if __name__ == "__main__":
-    app = create_app()
-
     logging.info("=" * 60)
     logging.info("🔧 INITIALISING DATABASE...")
     logging.info("=" * 60)
