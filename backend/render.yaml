@@ -1,9 +1,11 @@
 services:
   # ✅ Web Service (Flask Backend)
   - type: web
-    name: cash2switch-backend
+    name: c2s-backend
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      export CARGO_HOME=/opt/render/project/src/.cargo
+      pip install -r requirements.txt
     startCommand: gunicorn -c backend/gunicorn.conf.py backend.app:app
     envVars:
       - key: PYTHON_VERSION
@@ -14,11 +16,13 @@ services:
           name: streemlyne-redis
           property: connectionString
 
-  # ✅ NEW: Celery Worker
+  # ✅ Celery Worker
   - type: worker
-    name: cash2switch-celery
+    name: c2s-celery
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      export CARGO_HOME=/opt/render/project/src/.cargo
+      pip install -r requirements.txt
     startCommand: celery -A backend.celery_app worker --loglevel=info --concurrency=2
     envVars:
       - key: PYTHON_VERSION
@@ -29,9 +33,9 @@ services:
           name: streemlyne-redis
           property: connectionString
 
-  # ✅ NEW: Redis Service
+  # ✅ Redis Service
   - type: redis
     name: streemlyne-redis
     plan: free
     maxmemoryPolicy: allkeys-lru
-    ipAllowList: []  
+    ipAllowList: []
