@@ -85,7 +85,10 @@ def create_app():
     # ============================================
     CORS(
         app,
-        origins="*",
+        origins=[
+            "https://c2s-investments.vercel.app",
+            "http://localhost:3000",
+        ],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Content-Type",
