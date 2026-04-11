@@ -28,6 +28,17 @@ logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint('auth', __name__)
 
+@auth_bp.before_request
+def handle_preflight():
+    """Handle CORS preflight for all auth routes"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS, PUT, DELETE'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Tenant-ID'
+        response.headers['Access-Control-Max-Age'] = '3600'
+        return response, 200
+
 # --- Configuration and Helpers ---
 
 def get_client_ip():
