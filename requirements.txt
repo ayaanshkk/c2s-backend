@@ -125,7 +125,8 @@ msgspec==0.19.0
 mtok==5.0.0
 multidict==6.6.4
 multiprocess==0.70.18
-murmurhash==1.0.13
+murmurhash==1.0.15
+
 mypy_extensions==1.1.0
 mysql-connector-python==9.4.0
 narwhals==2.0.1
