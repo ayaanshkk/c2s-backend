@@ -1,357 +1,569 @@
-from flask import Blueprint, jsonify, request, current_app
-from datetime import datetime, timedelta
-from sqlalchemy import text
-from ..models import Notification_Master, Energy_Contract_Master, Client_Master, Project_Details, Employee_Master
-from .auth_helpers import token_required
-from ..db import SessionLocal
 import logging
+from datetime import datetime, timedelta
+from flask import Blueprint, request, jsonify, g
+from sqlalchemy import text
+from backend.db import SessionLocal
+from backend.routes.auth_helpers import token_required, get_current_tenant_id
 
 logger = logging.getLogger(__name__)
-notification_bp = Blueprint('notification', __name__, url_prefix='/notifications')
 
-# ✅ Throttle: only auto-generate once per hour per tenant (prevents pool exhaustion)
-_last_auto_generate: dict = {}
+notifications_bp = Blueprint('notifications', __name__)
 
+SCHEMA = "StreemLyne_MT"
+NOTIFICATIONS_TABLE = f'"{SCHEMA}"."Notification_Master"'
+PROPERTY_TABLE = f'"{SCHEMA}"."Property_Master"'
 
-def get_tenant_id_from_user(user):
-    if hasattr(user, 'tenant_id') and user.tenant_id is not None:
-        return user.tenant_id
-    session = SessionLocal()
-    try:
-        employee = session.query(Employee_Master).filter_by(employee_id=user.employee_id).first()
-        return employee.tenant_id if employee else None
-    finally:
-        session.close()
-
-
-def create_assignment_notification(session, tenant_id: str, client_id: int, assigned_employee_id: int, assigned_by_name: str, display_id: int = None):
-    """Create a notification when a record is assigned to an employee."""
-    try:
-        sql = text('''
-            SELECT
-                cm.client_company_name,
-                cm.client_contact_name,
-                COALESCE(cm.display_order, cm.client_id) AS display_id
-            FROM "StreemLyne_MT"."Client_Master" cm
-            WHERE cm.client_id = :client_id
-            LIMIT 1
-        ''')
-        result = session.execute(sql, {'client_id': client_id, 'tenant_id': tenant_id}).mappings().first()
-        if not result:
-            return
-
-        name = result['client_company_name'] or result['client_contact_name'] or f'Client #{client_id}'
-        did = display_id or result['display_id'] or client_id
-
-        message = (
-            f"📋 New record assigned to you\n"
-            f"👤 Customer: {name}\n"
-            f"🆔 ID: {did}\n"
-            f"👤 Assigned by: {assigned_by_name}"
-        )
-
-        session.add(Notification_Master(
-            tenant_id=tenant_id,
-            employee_id=assigned_employee_id,  # ✅ Always targeted — never None
-            client_id=client_id,
-            contract_id=None,
-            notification_type='assignment',
-            priority='normal',
-            message=message,
-            read=False,
-            dismissed=False,
-            created_at=datetime.utcnow()
-        ))
-        logger.info('Assignment notification created for employee_id=%s client_id=%s', assigned_employee_id, client_id)
-    except Exception as e:
-        logger.exception('create_assignment_notification failed: %s', e)
-
-
-@notification_bp.route('/generate-contract-notifications', methods=['POST'])
+@notifications_bp.route('/', methods=['GET', 'OPTIONS'])
 @token_required
-def generate_contract_notifications():
-    """Manual trigger — generate contract expiry notifications for the current tenant."""
+def get_notifications():
+    """Get all notifications for current user"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
     session = SessionLocal()
+    
     try:
-        tenant_id = get_tenant_id_from_user(request.current_user)
+        tenant_id = get_current_tenant_id()
         if not tenant_id:
-            return jsonify({'error': 'Tenant not found'}), 400
-
-        count = _generate_notifications_for_tenant(session, tenant_id)
-        session.commit()
-
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+        
+        current_user = g.user
+        employee_id = current_user.employee_id
+        
+        # Get filter parameters
+        is_read = request.args.get('is_read')
+        notification_type = request.args.get('type')
+        limit = request.args.get('limit', 50, type=int)
+        
+        # Build query
+        filters = ["n.tenant_id = :tenant_id", "n.dismissed = FALSE"]
+        params = {'tenant_id': tenant_id}
+        
+        # Show notifications for this employee or property-level notifications
+        filters.append("(n.employee_id = :employee_id OR n.employee_id IS NULL)")
+        params['employee_id'] = employee_id
+        
+        if is_read is not None:
+            filters.append("n.read = :is_read")
+            params['is_read'] = is_read.lower() == 'true'
+        
+        if notification_type:
+            filters.append("n.notification_type = :notification_type")
+            params['notification_type'] = notification_type
+        
+        where_clause = " AND ".join(filters)
+        
+        query = text(f'''
+            SELECT 
+                n.notification_id,
+                n.property_id,
+                n.client_id,
+                n.contract_id,
+                p.property_name,
+                n.notification_type,
+                n.message,
+                n.priority,
+                n.read,
+                n.dismissed,
+                n.created_at,
+                n.read_at
+            FROM {NOTIFICATIONS_TABLE} n
+            LEFT JOIN {PROPERTY_TABLE} p ON n.property_id = p.property_id
+            WHERE {where_clause}
+            ORDER BY 
+                CASE WHEN n.priority = 'urgent' THEN 0 ELSE 1 END,
+                n.created_at DESC
+            LIMIT :limit
+        ''')
+        
+        params['limit'] = limit
+        
+        result = session.execute(query, params)
+        notifications = []
+        
+        for row in result:
+            notifications.append({
+                'id': str(row.notification_id),
+                'notification_id': row.notification_id,
+                'property_id': row.property_id,
+                'client_id': row.client_id,
+                'contract_id': row.contract_id,
+                'property_name': row.property_name,
+                'notification_type': row.notification_type,
+                'message': row.message,
+                'priority': row.priority,
+                'read': row.read,
+                'dismissed': row.dismissed,
+                'created_at': row.created_at.isoformat() if row.created_at else None,
+                'read_at': row.read_at.isoformat() if row.read_at else None,
+            })
+        
+        # Get unread count
+        unread_query = text(f'''
+            SELECT COUNT(*) 
+            FROM {NOTIFICATIONS_TABLE}
+            WHERE tenant_id = :tenant_id 
+            AND (employee_id = :employee_id OR employee_id IS NULL)
+            AND read = FALSE
+            AND dismissed = FALSE
+        ''')
+        
+        unread_count = session.execute(
+            unread_query, 
+            {'tenant_id': tenant_id, 'employee_id': employee_id}
+        ).scalar()
+        
         return jsonify({
             'success': True,
-            'message': f'{count} notifications created',
+            'notifications': notifications,
+            'unread_count': unread_count or 0,
+            'total': len(notifications)
         }), 200
-
+        
     except Exception as e:
-        session.rollback()
-        logger.exception('Error generating contract notifications: %s', e)
-        return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
-
-
-@notification_bp.route('/production', methods=['GET'])
-@token_required
-def get_production_notifications():
-    """Get notifications for the current user only."""
-    session = SessionLocal()
-    try:
-        tenant_id = get_tenant_id_from_user(request.current_user)
-        employee_id = getattr(request.current_user, 'employee_id', None)
-
-        # ✅ Throttle: only auto-generate once per hour per tenant
-        now = datetime.utcnow()
-        last_run = _last_auto_generate.get(tenant_id)
-        if not last_run or (now - last_run).total_seconds() > 3600:
-            try:
-                _generate_notifications_for_tenant(session, tenant_id)
-                session.commit()
-                _last_auto_generate[tenant_id] = now
-            except Exception as gen_err:
-                session.rollback()
-                logger.warning('Auto-generate notifications failed (non-fatal): %s', gen_err)
-
-        # ✅ Everyone sees only their own notifications — no admin catch-all
-        notifications = session.execute(text('''
-            SELECT * FROM "StreemLyne_MT"."Notification_Master"
-            WHERE tenant_id = :tid
-              AND employee_id = :eid
-              AND dismissed = false
-            ORDER BY
-                CASE WHEN priority = 'urgent' THEN 0 ELSE 1 END,
-                created_at DESC
-        '''), {'tid': tenant_id, 'eid': employee_id}).mappings().all()
-
-        def _serial(v):
-            if v is None: return None
-            if hasattr(v, 'isoformat'): return v.isoformat()
-            return v
-
-        notifications_data = [{
-            'id': str(r['notification_id']),
-            'client_id': r['client_id'],
-            'contract_id': r['contract_id'],
-            'message': r['message'],
-            'priority': r['priority'],
-            'notification_type': r['notification_type'],
-            'read': r['read'],
-            'dismissed': r['dismissed'],
-            'created_at': _serial(r['created_at']),
-        } for r in notifications]
-
-        unread_count = sum(1 for n in notifications_data if not n['read'])
-
+        logger.error(f"Error fetching notifications: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
-            'notifications': notifications_data,
-            'unread_count': unread_count,
-        }), 200
-
-    except Exception as e:
-        logger.exception('Error fetching notifications: %s', e)
-        return jsonify({'error': str(e)}), 500
+            'success': False,
+            'error': str(e)
+        }), 500
     finally:
         session.close()
 
-
-def _generate_notifications_for_tenant(session, tenant_id: str) -> int:
-    """
-    Core logic: generate contract expiry notifications for a tenant.
-    Only notifies the assigned employee — no admin broadcast.
-    Returns number of notifications created.
-    """
-    today = datetime.utcnow().date()
-    date_60 = today + timedelta(days=60)
-
-    sql = text('''
-        SELECT
-            ecm.energy_contract_master_id AS contract_id,
-            ecm.contract_end_date,
-            ecm.mpan_number,
-            cm.client_id,
-            cm.client_company_name,
-            cm.client_phone,
-            COALESCE(cm.display_order, cm.client_id) AS display_id,
-            pd.assigned_employee_id AS assigned_employee_id
-        FROM "StreemLyne_MT"."Energy_Contract_Master" ecm
-        JOIN "StreemLyne_MT"."Project_Details" pd ON ecm.project_id = pd.project_id
-        JOIN "StreemLyne_MT"."Client_Master" cm ON pd.client_id = cm.client_id
-        WHERE cm.tenant_id = :tenant_id
-          AND cm.is_deleted = false
-          AND cm.is_archived = false
-          AND ecm.contract_end_date BETWEEN :today AND :end_date
-          AND ecm.service_id = 1
-        ORDER BY ecm.contract_end_date ASC
-    ''')
-
-    contracts = session.execute(sql, {
-        'tenant_id': tenant_id,
-        'today': today,
-        'end_date': date_60,
-    }).mappings().all()
-
-    count = 0
-
-    for contract in contracts:
-        assigned_employee_id = contract.get('assigned_employee_id')
-        if not assigned_employee_id:
-            continue  # ✅ Skip unassigned contracts — no broadcast
-
-        end_date = contract['contract_end_date']
-        days = (end_date - today).days
-
-        if days <= 30:
-            ntype = 'contract_expiry_0_30'
-            urgency_text = '🚨 URGENT'
-        elif days <= 60:
-            ntype = 'contract_expiry_31_60'
-            urgency_text = '⚠️ ACTION NEEDED'
-        else:
-            continue
-
-        # ✅ Dedup check per employee — don't spam the same notification
-        existing = session.execute(text('''
-            SELECT 1 FROM "StreemLyne_MT"."Notification_Master"
-            WHERE tenant_id = :tid
-              AND contract_id = :cid
-              AND employee_id = :eid
-              AND notification_type = :ntype
-              AND dismissed = false
-            LIMIT 1
-        '''), {
-            'tid': tenant_id,
-            'cid': contract['contract_id'],
-            'eid': assigned_employee_id,
-            'ntype': ntype,
-        }).first()
-
-        if existing:
-            continue
-
-        display_id = contract.get('display_id') or contract['client_id']
-        message = (
-            f"{urgency_text}: Contract expiring in {days} day{'s' if days != 1 else ''}\n"
-            f"📋 Customer: {contract['client_company_name']}\n"
-            f"🆔 ID: {display_id}\n"
-            f"📅 Expiry: {end_date.strftime('%d/%m/%Y')}\n"
-            f"📞 Phone: {contract['client_phone'] or '—'}"
-        )
-        if contract.get('mpan_number'):
-            message += f"\n🔌 MPAN: {contract['mpan_number']}"
-
-        # ✅ Only notify the assigned employee — no admin copy with employee_id=None
-        session.add(Notification_Master(
-            tenant_id=tenant_id,
-            employee_id=assigned_employee_id,
-            client_id=contract['client_id'],
-            contract_id=contract['contract_id'],
-            notification_type=ntype,
-            priority='urgent',
-            message=message,
-            read=False,
-            dismissed=False,
-            created_at=datetime.utcnow()
-        ))
-        count += 1
-
-    return count
-
-
-@notification_bp.route('/mark-read/<int:notification_id>', methods=['PATCH'])
+@notifications_bp.route('/<int:notification_id>/read', methods=['POST', 'OPTIONS'])
 @token_required
 def mark_notification_read(notification_id):
+    """Mark a notification as read"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
     session = SessionLocal()
+    
     try:
-        n = session.query(Notification_Master).filter_by(notification_id=notification_id).first()
-        if not n:
-            return jsonify({'error': 'Notification not found'}), 404
-        n.read = True
-        n.read_at = datetime.utcnow()
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+        
+        current_user = g.user
+        employee_id = current_user.employee_id
+        now = datetime.utcnow()
+        
+        result = session.execute(
+            text(f'''
+                UPDATE {NOTIFICATIONS_TABLE}
+                SET read = TRUE, read_at = :read_at
+                WHERE notification_id = :notification_id
+                AND tenant_id = :tenant_id
+                AND (employee_id = :employee_id OR employee_id IS NULL)
+                RETURNING notification_id
+            '''),
+            {
+                'notification_id': notification_id,
+                'tenant_id': tenant_id,
+                'employee_id': employee_id,
+                'read_at': now
+            }
+        )
+        
+        if result.scalar() is None:
+            session.rollback()
+            return jsonify({
+                'success': False,
+                'error': 'Notification not found'
+            }), 404
+        
         session.commit()
-        return jsonify({'message': 'Notification marked as read'}), 200
+        
+        return jsonify({
+            'success': True,
+            'message': 'Notification marked as read'
+        }), 200
+        
     except Exception as e:
         session.rollback()
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error marking notification as read: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
     finally:
         session.close()
 
-
-@notification_bp.route('/mark-all-read', methods=['PATCH'])
+@notifications_bp.route('/mark-all-read', methods=['POST', 'OPTIONS'])
 @token_required
-def mark_all_notifications_read():
+def mark_all_read():
+    """Mark all notifications as read for current user"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
     session = SessionLocal()
+    
     try:
-        tenant_id = get_tenant_id_from_user(request.current_user)
-        employee_id = getattr(request.current_user, 'employee_id', None)
-
-        session.query(Notification_Master).filter(
-            Notification_Master.tenant_id == tenant_id,
-            Notification_Master.employee_id == employee_id
-        ).update({'read': True, 'read_at': datetime.utcnow()})
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+        
+        current_user = g.user
+        employee_id = current_user.employee_id
+        now = datetime.utcnow()
+        
+        result = session.execute(
+            text(f'''
+                UPDATE {NOTIFICATIONS_TABLE}
+                SET read = TRUE, read_at = :read_at
+                WHERE tenant_id = :tenant_id
+                AND (employee_id = :employee_id OR employee_id IS NULL)
+                AND read = FALSE
+                AND dismissed = FALSE
+                RETURNING notification_id
+            '''),
+            {
+                'tenant_id': tenant_id,
+                'employee_id': employee_id,
+                'read_at': now
+            }
+        )
+        
+        count = len(result.fetchall())
         session.commit()
-        return jsonify({'message': 'All notifications marked as read'}), 200
+        
+        return jsonify({
+            'success': True,
+            'message': f'{count} notification(s) marked as read',
+            'count': count
+        }), 200
+        
     except Exception as e:
         session.rollback()
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error marking all notifications as read: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
     finally:
         session.close()
 
-
-@notification_bp.route('/dismiss/<int:notification_id>', methods=['PATCH'])
+@notifications_bp.route('/<int:notification_id>/dismiss', methods=['POST', 'OPTIONS'])
 @token_required
 def dismiss_notification(notification_id):
+    """Dismiss a notification"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
     session = SessionLocal()
+    
     try:
-        n = session.query(Notification_Master).filter_by(notification_id=notification_id).first()
-        if not n:
-            return jsonify({'error': 'Notification not found'}), 404
-        n.dismissed = True
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+        
+        current_user = g.user
+        employee_id = current_user.employee_id
+        
+        result = session.execute(
+            text(f'''
+                UPDATE {NOTIFICATIONS_TABLE}
+                SET dismissed = TRUE
+                WHERE notification_id = :notification_id
+                AND tenant_id = :tenant_id
+                AND (employee_id = :employee_id OR employee_id IS NULL)
+                RETURNING notification_id
+            '''),
+            {
+                'notification_id': notification_id,
+                'tenant_id': tenant_id,
+                'employee_id': employee_id
+            }
+        )
+        
+        if result.scalar() is None:
+            session.rollback()
+            return jsonify({
+                'success': False,
+                'error': 'Notification not found'
+            }), 404
+        
         session.commit()
-        return jsonify({'message': 'Notification dismissed'}), 200
+        
+        return jsonify({
+            'success': True,
+            'message': 'Notification dismissed'
+        }), 200
+        
     except Exception as e:
         session.rollback()
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error dismissing notification: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
     finally:
         session.close()
 
-
-@notification_bp.route('/delete/<int:notification_id>', methods=['DELETE'])
+@notifications_bp.route('/<int:notification_id>', methods=['DELETE', 'OPTIONS'])
 @token_required
 def delete_notification(notification_id):
+    """Delete a notification"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
     session = SessionLocal()
+    
     try:
-        n = session.query(Notification_Master).filter_by(notification_id=notification_id).first()
-        if not n:
-            return jsonify({'error': 'Notification not found'}), 404
-        session.delete(n)
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+        
+        current_user = g.user
+        employee_id = current_user.employee_id
+        
+        result = session.execute(
+            text(f'''
+                DELETE FROM {NOTIFICATIONS_TABLE}
+                WHERE notification_id = :notification_id
+                AND tenant_id = :tenant_id
+                AND (employee_id = :employee_id OR employee_id IS NULL)
+                RETURNING notification_id
+            '''),
+            {
+                'notification_id': notification_id,
+                'tenant_id': tenant_id,
+                'employee_id': employee_id
+            }
+        )
+        
+        if result.scalar() is None:
+            session.rollback()
+            return jsonify({
+                'success': False,
+                'error': 'Notification not found'
+            }), 404
+        
         session.commit()
-        return jsonify({'message': 'Notification deleted'}), 200
+        
+        return jsonify({
+            'success': True,
+            'message': 'Notification deleted'
+        }), 200
+        
     except Exception as e:
         session.rollback()
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error deleting notification: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
     finally:
         session.close()
 
-
-@notification_bp.route('/clear-all', methods=['DELETE'])
+@notifications_bp.route('/clear-all', methods=['DELETE', 'OPTIONS'])
 @token_required
 def clear_all_notifications():
+    """Clear all notifications for current user"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
     session = SessionLocal()
+    
     try:
-        tenant_id = get_tenant_id_from_user(request.current_user)
-        employee_id = getattr(request.current_user, 'employee_id', None)
-
-        # ✅ Only clear the current user's own notifications
-        session.query(Notification_Master).filter(
-            Notification_Master.tenant_id == tenant_id,
-            Notification_Master.employee_id == employee_id
-        ).delete()
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+        
+        current_user = g.user
+        employee_id = current_user.employee_id
+        
+        result = session.execute(
+            text(f'''
+                DELETE FROM {NOTIFICATIONS_TABLE}
+                WHERE tenant_id = :tenant_id
+                AND (employee_id = :employee_id OR employee_id IS NULL)
+                RETURNING notification_id
+            '''),
+            {
+                'tenant_id': tenant_id,
+                'employee_id': employee_id
+            }
+        )
+        
+        count = len(result.fetchall())
         session.commit()
-        return jsonify({'message': 'All notifications cleared'}), 200
+        
+        return jsonify({
+            'success': True,
+            'message': f'{count} notification(s) deleted',
+            'count': count
+        }), 200
+        
     except Exception as e:
         session.rollback()
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error clearing notifications: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        session.close()
+
+@notifications_bp.route('/generate-rent-reminders', methods=['POST', 'OPTIONS'])
+@token_required
+def generate_rent_reminders():
+    """
+    Generate rent reminder notifications for properties where rent is due in 7 days
+    This should be called by a cron job daily
+    """
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    session = SessionLocal()
+    
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+        
+        # Calculate the target date (7 days from now)
+        target_date = datetime.utcnow() + timedelta(days=7)
+        target_day = target_date.day
+        
+        # Find properties where rent_due_day matches the target day
+        query = text(f'''
+            SELECT 
+                p.property_id,
+                p.property_name,
+                p.tenant_name,
+                p.monthly_rent,
+                p.rent_due_day,
+                p.assigned_agent_id,
+                p.address,
+                p.city
+            FROM {PROPERTY_TABLE} p
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+            AND p.occupancy_status = 'Occupied'
+            AND p.rent_due_day = :target_day
+            AND p.monthly_rent IS NOT NULL
+            AND p.monthly_rent > 0
+        ''')
+        
+        properties = session.execute(query, {
+            'tenant_id': tenant_id,
+            'target_day': target_day
+        }).fetchall()
+        
+        created_count = 0
+        now = datetime.utcnow()
+        
+        for prop in properties:
+            # Check if notification already exists for this property this month
+            existing = session.execute(
+                text(f'''
+                    SELECT 1 FROM {NOTIFICATIONS_TABLE}
+                    WHERE tenant_id = :tenant_id
+                    AND property_id = :property_id
+                    AND notification_type = 'rent_reminder'
+                    AND created_at >= DATE_TRUNC('month', CURRENT_DATE)
+                    AND dismissed = FALSE
+                    LIMIT 1
+                '''),
+                {
+                    'tenant_id': tenant_id,
+                    'property_id': prop.property_id
+                }
+            ).first()
+            
+            if existing:
+                continue  # Skip if already notified this month
+            
+            # Create notification message
+            location = f"{prop.address}, {prop.city}" if prop.city else prop.address
+            message = (
+                f"💰 Rent payment due in 7 days\n"
+                f"🏠 Property: {prop.property_name}\n"
+                f"📍 Location: {location}\n"
+                f"👤 Tenant: {prop.tenant_name or 'N/A'}\n"
+                f"💷 Amount: £{prop.monthly_rent:,.2f}\n"
+                f"📅 Due: {target_date.strftime('%d %B %Y')}"
+            )
+            
+            session.execute(
+                text(f'''
+                    INSERT INTO {NOTIFICATIONS_TABLE} (
+                        tenant_id,
+                        property_id,
+                        employee_id,
+                        client_id,
+                        contract_id,
+                        notification_type,
+                        priority,
+                        message,
+                        read,
+                        dismissed,
+                        created_at
+                    ) VALUES (
+                        :tenant_id,
+                        :property_id,
+                        :employee_id,
+                        NULL,
+                        NULL,
+                        'rent_reminder',
+                        'normal',
+                        :message,
+                        FALSE,
+                        FALSE,
+                        :created_at
+                    )
+                '''),
+                {
+                    'tenant_id': tenant_id,
+                    'property_id': prop.property_id,
+                    'employee_id': prop.assigned_agent_id,
+                    'message': message,
+                    'created_at': now
+                }
+            )
+            created_count += 1
+        
+        session.commit()
+        
+        logger.info(f"✅ Generated {created_count} rent reminders for tenant {tenant_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'{created_count} rent reminder(s) created',
+            'count': created_count
+        }), 200
+        
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error generating rent reminders: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
     finally:
         session.close()

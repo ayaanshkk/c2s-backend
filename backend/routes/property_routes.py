@@ -461,7 +461,7 @@ def Property_Payments_collection(property_id):
                 'count': len(payments),
             }), 200
 
-        # POST - Create new payment
+        # POST - Create or Update payment
         data = request.get_json() or {}
         month = str(data.get('month') or '').strip()
         if not _month_format_ok(month):
@@ -490,45 +490,85 @@ def Property_Payments_collection(property_id):
         notes = (notes or '').strip() or None
 
         now = datetime.utcnow()
-        try:
-            res = session.execute(
-                text(
-                    f"""
-                    INSERT INTO {PAYMENTS_TABLE} (
-                        tenant_id, property_id, month, amount, status, notes,
-                        created_at, updated_at
-                    )
-                    VALUES (:tid, :pid, :m, :amt, :st, :notes, :ca, :ua)
-                    RETURNING id
-                    """
-                ),
+        
+        # ✅ CHECK IF PAYMENT ALREADY EXISTS FOR THIS MONTH
+        existing = session.execute(
+            text(f"""
+                SELECT id FROM {PAYMENTS_TABLE}
+                WHERE tenant_id = :tid 
+                AND property_id = :pid 
+                AND month = :m
+                LIMIT 1
+            """),
+            {'tid': tenant_id, 'pid': property_id, 'm': month}
+        ).first()
+        
+        if existing:
+            # ✅ UPDATE EXISTING PAYMENT
+            session.execute(
+                text(f"""
+                    UPDATE {PAYMENTS_TABLE}
+                    SET amount = :amt, 
+                        status = :st, 
+                        notes = :notes,
+                        updated_at = :ua
+                    WHERE id = :payment_id
+                """),
                 {
-                    'tid': tenant_id,
-                    'pid': property_id,
-                    'm': month,
                     'amt': float(amount),
                     'st': raw_status,
                     'notes': notes,
-                    'ca': now,
                     'ua': now,
-                },
+                    'payment_id': existing.id
+                }
             )
-            pid = res.scalar()
             session.commit()
             return jsonify({
                 'success': True,
-                'payment_id': pid,
-                'message': 'Payment created',
-            }), 201
-        except Exception as insert_err:
-            session.rollback()
-            err_s = str(insert_err).lower()
-            if 'uq_Property_Payments_month' in err_s or 'unique' in err_s:
+                'payment_id': existing.id,
+                'message': 'Payment updated',
+            }), 200
+        else:
+            # ✅ CREATE NEW PAYMENT
+            try:
+                res = session.execute(
+                    text(
+                        f"""
+                        INSERT INTO {PAYMENTS_TABLE} (
+                            tenant_id, property_id, month, amount, status, notes,
+                            created_at, updated_at
+                        )
+                        VALUES (:tid, :pid, :m, :amt, :st, :notes, :ca, :ua)
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        'tid': tenant_id,
+                        'pid': property_id,
+                        'm': month,
+                        'amt': float(amount),
+                        'st': raw_status,
+                        'notes': notes,
+                        'ca': now,
+                        'ua': now,
+                    },
+                )
+                pid = res.scalar()
+                session.commit()
                 return jsonify({
-                    'success': False,
-                    'error': 'A payment for this month already exists',
-                }), 409
-            raise
+                    'success': True,
+                    'payment_id': pid,
+                    'message': 'Payment created',
+                }), 201
+            except Exception as insert_err:
+                session.rollback()
+                err_s = str(insert_err).lower()
+                if 'uq_Property_Payments_month' in err_s or 'unique' in err_s:
+                    return jsonify({
+                        'success': False,
+                        'error': 'A payment for this month already exists',
+                    }), 409
+                raise
 
     except Exception as e:
         session.rollback()
@@ -537,11 +577,7 @@ def Property_Payments_collection(property_id):
     finally:
         session.close()
 
-
-@property_bp.route(
-    '/<int:property_id>/payments/<int:payment_id>',
-    methods=['PUT', 'OPTIONS'],
-)
+@property_bp.route('/<int:property_id>/payments/<payment_id>', methods=['PUT', 'OPTIONS'])
 @token_required
 def property_payment_update(property_id, payment_id):
     """Update existing payment record"""
@@ -559,7 +595,6 @@ def property_payment_update(property_id, payment_id):
 
         data = request.get_json() or {}
         
-        # Validate and extract fields
         try:
             amount = Decimal(str(data.get('amount', 0)))
         except InvalidOperation:
@@ -582,7 +617,10 @@ def property_payment_update(property_id, payment_id):
         res = session.execute(
             text(f"""
                 UPDATE {PAYMENTS_TABLE}
-                SET amount = :amt, status = :st, notes = :notes, updated_at = :ua
+                SET amount = :amt, 
+                    status = :st,
+                    notes = :notes, 
+                    updated_at = :ua
                 WHERE id = :pay_id AND tenant_id = :tid AND property_id = :pid
                 RETURNING id
             """),
@@ -611,11 +649,7 @@ def property_payment_update(property_id, payment_id):
     finally:
         session.close()
 
-
-@property_bp.route(
-    '/<int:property_id>/payments/<int:payment_id>',
-    methods=['DELETE', 'OPTIONS'],
-)
+@property_bp.route('/<int:property_id>/payments/<payment_id>', methods=['DELETE', 'OPTIONS'])
 @token_required
 def property_payment_delete(property_id, payment_id):
     """Delete a payment record"""

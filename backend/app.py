@@ -122,7 +122,7 @@ def create_app():
     app.register_blueprint(tenant_routes.tenant_bp)
     app.register_blueprint(dashboard_routes.dashboard_bp)
     app.register_blueprint(db_routes.db_bp)
-    app.register_blueprint(notification_routes.notification_bp)
+    app.register_blueprint(notification_routes.notifications_bp, url_prefix='/api/notifications')
     app.register_blueprint(document_routes.document_bp)
     app.register_blueprint(calendar_routes.calendar_bp)
     app.register_blueprint(property_interactions_routes.interaction_bp)

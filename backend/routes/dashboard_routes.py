@@ -35,16 +35,7 @@ def after_request(response):
 @dashboard_bp.route('/overview', methods=['GET', 'OPTIONS'])
 @token_required
 def get_dashboard_overview():
-    """
-    Main dashboard overview statistics
-    
-    Returns:
-    - Total properties
-    - Properties by status (Available, Occupied, Maintenance)
-    - Total monthly income
-    - Occupancy rate
-    - Recent activity
-    """
+    """Main dashboard overview statistics"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
@@ -56,13 +47,10 @@ def get_dashboard_overview():
             return jsonify({
                 'success': False,
                 'error': 'Invalid tenant context',
-                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
             }), 403
 
         # Optional agent filter
         agent_id = request.args.get('agent_id', type=int)
-        
-        # Build base query with optional agent filter
         agent_filter = "AND p.assigned_agent_id = :agent_id" if agent_id else ""
         params = {'tenant_id': tenant_id}
         if agent_id:
@@ -73,13 +61,13 @@ def get_dashboard_overview():
             SELECT 
                 COUNT(*) as total_properties,
                 COUNT(CASE WHEN s.stage_name = 'Available' THEN 1 END) as available,
-                COUNT(CASE WHEN s.stage_name = 'Occupied' THEN 1 END) as occupied,
+                COUNT(CASE WHEN p.occupancy_status = 'Occupied' THEN 1 END) as occupied,
                 COUNT(CASE WHEN s.stage_name = 'Under Maintenance' THEN 1 END) as maintenance,
                 COUNT(CASE WHEN s.stage_name = 'Listed' THEN 1 END) as listed,
                 COUNT(CASE WHEN s.stage_name = 'Reserved' THEN 1 END) as reserved,
                 COUNT(CASE WHEN p.assigned_agent_id IS NOT NULL THEN 1 END) as assigned,
                 COALESCE(SUM(CASE 
-                    WHEN s.stage_name = 'Occupied' AND p.monthly_rent IS NOT NULL 
+                    WHEN p.occupancy_status = 'Occupied' AND p.monthly_rent IS NOT NULL 
                     THEN p.monthly_rent 
                     ELSE 0 
                 END), 0) as total_monthly_income,
@@ -94,11 +82,40 @@ def get_dashboard_overview():
         
         stats = session.execute(stats_query, params).first()
         
+        # Get total expenses across all properties
+        expenses_query = text('''
+            SELECT COALESCE(SUM(e.amount), 0) as total_expenses
+            FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN "StreemLyne_MT"."Property_Expenses" e
+                ON p.property_id = e.property_id
+                AND p.tenant_id = e.tenant_id
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+        ''')
+        
+        expenses_result = session.execute(expenses_query, {'tenant_id': tenant_id}).first()
+        total_expenses = float(expenses_result.total_expenses or 0)
+        
+        # ✅ NEW: Get total rent collected (from payments table)
+        rent_collected_query = text('''
+            SELECT COALESCE(SUM(pp.amount), 0) as total_collected
+            FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN "StreemLyne_MT"."Property_Payments" pp
+                ON p.property_id = pp.property_id
+                AND p.tenant_id = pp.tenant_id
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+            AND pp.status = 'PAID'
+        ''')
+        
+        rent_collected_result = session.execute(rent_collected_query, {'tenant_id': tenant_id}).first()
+        total_rent_collected = float(rent_collected_result.total_collected or 0)
+        
         # Occupancy rate
         total = stats.total_properties or 1
         occupancy_rate = round((stats.occupied / total * 100), 1) if total > 0 else 0.0
         
-        # Recent activity (properties added in last 30 days)
+        # Recent activity
         recent_query = text(f'''
             SELECT COUNT(*)
             FROM "StreemLyne_MT"."Property_Master" p
@@ -123,7 +140,9 @@ def get_dashboard_overview():
                 'total_monthly_income': float(stats.total_monthly_income or 0),
                 'avg_monthly_rent': float(stats.avg_monthly_rent or 0),
                 'occupancy_rate': occupancy_rate,
-                'recent_properties_30d': recent_properties
+                'recent_properties_30d': recent_properties,
+                'total_expenses': total_expenses,
+                'total_rent_collected': total_rent_collected  # ✅ NEW
             }
         }), 200
         
@@ -135,7 +154,6 @@ def get_dashboard_overview():
         }), 500
     finally:
         session.close()
-
 
 # ========================================
 # AGENT PERFORMANCE
@@ -171,7 +189,7 @@ def get_agent_performance():
                 em.employee_id,
                 em.employee_name,
                 COUNT(p.property_id) as total_properties,
-                COUNT(CASE WHEN s.stage_name = 'Occupied' THEN 1 END) as occupied,
+                COUNT(CASE WHEN p.occupancy_status = 'Occupied' THEN 1 END) as occupied,
                 COUNT(CASE WHEN s.stage_name = 'Available' THEN 1 END) as available,
                 COUNT(CASE WHEN s.stage_name = 'Under Maintenance' THEN 1 END) as maintenance,
                 COALESCE(SUM(CASE 
@@ -322,7 +340,7 @@ def get_location_breakdown():
             SELECT
                 COALESCE(p.city, 'Unknown') as city,
                 COUNT(p.property_id) as count,
-                COUNT(CASE WHEN s.stage_name = 'Occupied' THEN 1 END) as occupied,
+                COUNT(CASE WHEN p.occupancy_status = 'Occupied' THEN 1 END) as occupied,
                 COUNT(CASE WHEN s.stage_name = 'Available' THEN 1 END) as available,
                 COALESCE(SUM(CASE 
                     WHEN s.stage_name = 'Occupied' THEN p.monthly_rent 
@@ -396,7 +414,7 @@ def get_property_type_breakdown():
             SELECT
                 COALESCE(p.property_type, 'Unknown') as property_type,
                 COUNT(p.property_id) as count,
-                COUNT(CASE WHEN s.stage_name = 'Occupied' THEN 1 END) as occupied,
+                COUNT(CASE WHEN p.occupancy_status = 'Occupied' THEN 1 END) as occupied,
                 COALESCE(AVG(p.monthly_rent), 0) as avg_rent,
                 COALESCE(SUM(CASE 
                     WHEN s.stage_name = 'Occupied' THEN p.monthly_rent 
@@ -511,6 +529,142 @@ def get_recent_activity():
         
     except Exception as e:
         logger.exception("❌ Error fetching recent activity")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        session.close()
+
+@dashboard_bp.route('/expenses-breakdown', methods=['GET', 'OPTIONS'])
+@token_required
+def get_expenses_breakdown():
+    """
+    Get expenses breakdown by property
+    Returns list of properties with their total expenses
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    session = SessionLocal()
+    
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+            }), 403
+
+        query = text('''
+            SELECT 
+                p.property_id,
+                p.property_name,
+                p.address,
+                p.city,
+                COALESCE(SUM(e.amount), 0) as total_expenses,
+                COUNT(e.id) as expense_count
+            FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN "StreemLyne_MT"."Property_Expenses" e
+                ON p.property_id = e.property_id
+                AND p.tenant_id = e.tenant_id
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+            GROUP BY p.property_id, p.property_name, p.address, p.city
+            HAVING COUNT(e.id) > 0
+            ORDER BY total_expenses DESC
+        ''')
+        
+        result = session.execute(query, {'tenant_id': tenant_id}).fetchall()
+        
+        breakdown = []
+        for row in result:
+            breakdown.append({
+                'property_id': row.property_id,
+                'property_name': row.property_name,
+                'address': row.address,
+                'city': row.city,
+                'total_expenses': float(row.total_expenses or 0),
+                'expense_count': row.expense_count or 0
+            })
+        
+        return jsonify({
+            'success': True,
+            'breakdown': breakdown,
+            'total': sum(b['total_expenses'] for b in breakdown)
+        }), 200
+        
+    except Exception as e:
+        logger.exception("❌ Error fetching expenses breakdown")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        session.close()
+
+@dashboard_bp.route('/rent-collection-breakdown', methods=['GET', 'OPTIONS'])
+@token_required
+def get_rent_collection_breakdown():
+    """
+    Get rent collection breakdown by property
+    Returns list of properties with their total collected rent
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    session = SessionLocal()
+    
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+            }), 403
+
+        query = text('''
+            SELECT 
+                p.property_id,
+                p.property_name,
+                p.address,
+                p.city,
+                p.monthly_rent,
+                COALESCE(SUM(CASE WHEN pp.status = 'PAID' THEN pp.amount ELSE 0 END), 0) as total_collected,
+                COUNT(CASE WHEN pp.status = 'PAID' THEN 1 END) as payment_count
+            FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN "StreemLyne_MT"."Property_Payments" pp
+                ON p.property_id = pp.property_id
+                AND p.tenant_id = pp.tenant_id
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+            GROUP BY p.property_id, p.property_name, p.address, p.city, p.monthly_rent
+            HAVING COUNT(CASE WHEN pp.status = 'PAID' THEN 1 END) > 0
+            ORDER BY total_collected DESC
+        ''')
+        
+        result = session.execute(query, {'tenant_id': tenant_id}).fetchall()
+        
+        breakdown = []
+        for row in result:
+            breakdown.append({
+                'property_id': row.property_id,
+                'property_name': row.property_name,
+                'address': row.address,
+                'city': row.city,
+                'monthly_rent': float(row.monthly_rent or 0),
+                'total_collected': float(row.total_collected or 0),
+                'payment_count': row.payment_count or 0
+            })
+        
+        return jsonify({
+            'success': True,
+            'breakdown': breakdown,
+            'total': sum(b['total_collected'] for b in breakdown)
+        }), 200
+        
+    except Exception as e:
+        logger.exception("❌ Error fetching rent collection breakdown")
         return jsonify({
             'success': False,
             'error': str(e)
