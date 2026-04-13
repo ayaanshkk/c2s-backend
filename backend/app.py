@@ -42,6 +42,9 @@ def create_app():
     if not jwt_secret:
         raise ValueError("JWT_SECRET_KEY must be set in environment variables")
     app.config["SECRET_KEY"] = jwt_secret
+    app.config["LOGIN_ALLOWED_TENANT_ID"] = (
+        os.getenv("LOGIN_ALLOWED_TENANT_ID", "5").strip()
+    )
 
     # Property Management Configuration
     app.config["BLOB_READ_WRITE_TOKEN"] = os.getenv("BLOB_READ_WRITE_TOKEN")

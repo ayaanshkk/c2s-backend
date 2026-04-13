@@ -29,10 +29,8 @@ class PropertyRepository:
             query = f'''
                 SELECT 
                     p.*,
-                    COALESCE(ca.display_name, em.employee_name) AS assigned_agent_name
+                    em.employee_name AS assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
-                LEFT JOIN "{self.schema}"."crm_agents" ca
-                  ON p.assigned_crm_agent_id = ca.crm_agent_id
                 LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.is_deleted = FALSE
                   AND p.tenant_id = %s
@@ -74,10 +72,8 @@ class PropertyRepository:
             query = f'''
                 SELECT 
                     p.*,
-                    COALESCE(ca.display_name, em.employee_name) AS assigned_agent_name
+                    em.employee_name AS assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
-                LEFT JOIN "{self.schema}"."crm_agents" ca
-                  ON p.assigned_crm_agent_id = ca.crm_agent_id
                 LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.property_id = %s
                   AND p.tenant_id = %s
@@ -310,10 +306,9 @@ class PropertyRepository:
             query = f'''
                 SELECT 
                     p.*,
-                    ca.display_name AS assigned_agent_name
+                    em.employee_name AS assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
-                LEFT JOIN "{self.schema}"."crm_agents" ca
-                  ON p.assigned_crm_agent_id = ca.crm_agent_id
+                LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.assigned_crm_agent_id = %s
                   AND p.tenant_id = %s
                   AND p.is_deleted = FALSE

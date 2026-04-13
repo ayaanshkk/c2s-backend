@@ -19,6 +19,7 @@ import secrets
 import re
 import jwt
 import logging
+import os
 
 from backend.db import SessionLocal
 
@@ -54,6 +55,15 @@ def get_tenant_id_from_token():
         return payload.get('tenant_id')
     except Exception:
         return None
+
+
+def get_allowed_login_tenant_id():
+    """Tenant id allowed to sign in to this app instance."""
+    return normalize_tenant_id(
+        current_app.config.get('LOGIN_ALLOWED_TENANT_ID')
+        or os.getenv('LOGIN_ALLOWED_TENANT_ID')
+        or '5'
+    )
 
 # --- Routes ---
 
@@ -131,6 +141,16 @@ def login():
 
         # ===== 5. GENERATE JWT ===== (tenant_id always string — never from client for authz)
         tenant_slug = normalize_tenant_id(row.get('tenant_id'))
+        allowed_tenant_id = get_allowed_login_tenant_id()
+        if not tenant_slug or (allowed_tenant_id and tenant_slug != allowed_tenant_id):
+            logger.warning(
+                "Login blocked due to tenant restriction | user=%s user_tenant=%s allowed_tenant=%s",
+                username,
+                tenant_slug,
+                allowed_tenant_id,
+            )
+            return jsonify({'error': 'Invalid username or password'}), 401
+
         payload = {
             'user_id': row.get('user_id'),
             'employee_id': row.get('employee_id'),
