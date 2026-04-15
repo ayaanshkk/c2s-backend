@@ -19,25 +19,13 @@ import secrets
 import re
 import jwt
 import logging
-import bcrypt
-
+import os
 
 from backend.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint('auth', __name__)
-
-@auth_bp.before_request
-def handle_preflight():
-    """Handle CORS preflight for all auth routes"""
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS, PUT, DELETE'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Tenant-ID'
-        response.headers['Access-Control-Max-Age'] = '3600'
-        return response, 200
 
 # --- Configuration and Helpers ---
 
@@ -67,6 +55,15 @@ def get_tenant_id_from_token():
         return payload.get('tenant_id')
     except Exception:
         return None
+
+
+def get_allowed_login_tenant_id():
+    """Tenant id allowed to sign in to this app instance."""
+    return normalize_tenant_id(
+        current_app.config.get('LOGIN_ALLOWED_TENANT_ID')
+        or os.getenv('LOGIN_ALLOWED_TENANT_ID')
+        or '5'
+    )
 
 # --- Routes ---
 
@@ -144,6 +141,16 @@ def login():
 
         # ===== 5. GENERATE JWT ===== (tenant_id always string — never from client for authz)
         tenant_slug = normalize_tenant_id(row.get('tenant_id'))
+        allowed_tenant_id = get_allowed_login_tenant_id()
+        if not tenant_slug or (allowed_tenant_id and tenant_slug != allowed_tenant_id):
+            logger.warning(
+                "Login blocked due to tenant restriction | user=%s user_tenant=%s allowed_tenant=%s",
+                username,
+                tenant_slug,
+                allowed_tenant_id,
+            )
+            return jsonify({'error': 'Invalid username or password'}), 401
+
         payload = {
             'user_id': row.get('user_id'),
             'employee_id': row.get('employee_id'),
@@ -447,138 +454,3 @@ def refresh_token():
     except Exception as e:
         logger.exception(f"Error refreshing token: {e}")
         return jsonify({'error': str(e)}), 500
-    
-@auth_bp.route('/invite/validate/<token>', methods=['GET', 'OPTIONS'])
-def validate_invite(token):
-    if request.method == 'OPTIONS':
-        return '', 204
-    try:
-        from backend.properties.repositories.user_repository import UserRepository
-        repo = UserRepository()
-        user = repo.get_user_by_invite_token(token)
-        if not user:
-            return jsonify({'valid': False, 'error': 'Invalid or expired invite link'}), 404
-        return jsonify({
-            'valid': True,
-            'employee_name': user.get('employee_name'),
-            'username': user.get('user_name'),
-            'email': user.get('employee_email'),
-            'role': user.get('role_name', 'Agent'),
-        }), 200
-    except Exception as e:
-        return jsonify({'valid': False, 'error': str(e)}), 500
-
-
-@auth_bp.route('/verify-invite/<token>', methods=['GET', 'OPTIONS'])
-def verify_invite_token(token):
-    """Verify if invite token is valid and get agent details"""
-    if request.method == 'OPTIONS':
-        return '', 204
-        
-    try:
-        from backend.properties.repositories.user_repository import UserRepository
-        
-        repo = UserRepository()
-        user_data = repo.get_user_by_invite_token(token)
-        
-        if not user_data:
-            return jsonify({
-                'success': False,
-                'error': 'Invalid or expired invite token'
-            }), 404
-        
-        return jsonify({
-            'success': True,
-            'agent': {
-                'employee_name': user_data.get('employee_name', 'Agent'),
-                'email': user_data.get('employee_email'),
-                'phone': user_data.get('employee_phone'),
-                'role': user_data.get('role_name', 'Agent'),
-            }
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"❌ Error verifying invite token: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-
-@auth_bp.route('/accept-invite', methods=['POST', 'OPTIONS'])
-def accept_invite():
-    """Accept invite and set username/password"""
-    if request.method == 'OPTIONS':
-        return '', 204
-        
-    try:
-        from backend.properties.repositories.user_repository import UserRepository
-        
-        data = request.get_json()
-        token = data.get('token', '').strip()
-        username = data.get('username', '').strip()
-        password = data.get('password', '').strip()
-        
-        if not all([token, username, password]):
-            return jsonify({
-                'success': False,
-                'error': 'Token, username, and password are required'
-            }), 400
-        
-        if len(username) < 3:
-            return jsonify({
-                'success': False,
-                'error': 'Username must be at least 3 characters'
-            }), 400
-            
-        if len(password) < 6:
-            return jsonify({
-                'success': False,
-                'error': 'Password must be at least 6 characters'
-            }), 400
-        
-        repo = UserRepository()
-        
-        # Get user by invite token
-        user_data = repo.get_user_by_invite_token(token)
-        
-        if not user_data:
-            return jsonify({
-                'success': False,
-                'error': 'Invalid or expired invite token'
-            }), 404
-        
-        user_id = user_data.get('user_id')
-        
-        # Check if username is already taken (but not by this user)
-        existing = repo.get_user_by_username(username)
-        
-        if existing and existing.get('user_id') != user_id:
-            return jsonify({
-                'success': False,
-                'error': 'Username already taken. Please choose another.'
-            }), 409
-        
-        # Update user with new credentials
-        success = repo.complete_invite_acceptance(user_id, username, password)
-        
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to activate account'
-            }), 500
-        
-        logger.info(f"✅ Invite accepted for {username} (user_id: {user_id})")
-        
-        return jsonify({
-            'success': True,
-            'message': 'Account activated successfully. You can now login.',
-            'username': username
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"❌ Error accepting invite: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500

@@ -42,6 +42,9 @@ def create_app():
     if not jwt_secret:
         raise ValueError("JWT_SECRET_KEY must be set in environment variables")
     app.config["SECRET_KEY"] = jwt_secret
+    app.config["LOGIN_ALLOWED_TENANT_ID"] = (
+        os.getenv("LOGIN_ALLOWED_TENANT_ID", "5").strip()
+    )
 
     # Property Management Configuration
     app.config["BLOB_READ_WRITE_TOKEN"] = os.getenv("BLOB_READ_WRITE_TOKEN")
@@ -99,15 +102,6 @@ def create_app():
         automatic_options=True
     )
 
-    @app.after_request
-    def add_cors_headers(response):
-        """Ensure CORS headers are always present"""
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, X-Tenant-ID'
-        response.headers['Access-Control-Max-Age'] = '3600'
-        return response
-
     # ============================================
     # BLUEPRINTS - CRM SYSTEM
     # ============================================
@@ -115,19 +109,25 @@ def create_app():
         auth_routes, db_routes,
         notification_routes, dashboard_routes,
         document_routes, calendar_routes,
-        property_interactions_routes, tenant_routes, property_expense_routes,
+        property_interactions_routes, tenant_routes
     )
 
     app.register_blueprint(auth_routes.auth_bp, url_prefix='/auth')
     app.register_blueprint(tenant_routes.tenant_bp)
     app.register_blueprint(dashboard_routes.dashboard_bp)
     app.register_blueprint(db_routes.db_bp)
-    app.register_blueprint(notification_routes.notifications_bp, url_prefix='/api/notifications')
+    app.register_blueprint(notification_routes.notifications_bp)
     app.register_blueprint(document_routes.document_bp)
     app.register_blueprint(calendar_routes.calendar_bp)
     app.register_blueprint(property_interactions_routes.interaction_bp)
-    app.register_blueprint(property_expense_routes.property_expense_bp, url_prefix='/api/properties')
 
+    try:
+        from backend.routes import property_crm_routes
+        app.register_blueprint(property_crm_routes.property_crm_bp)
+        logging.info("✅ property_crm_bp registered at /api/pcrm")
+    except Exception as e:
+        logging.error("property_crm_routes failed to load: %s", e)
+    
     logging.info("✅ CRM Blueprints registered")
 
     # ============================================
@@ -214,12 +214,13 @@ def create_app():
 
     return app
 
-app = create_app()
 
 # ============================================
 # STANDALONE LAUNCH
 # ============================================
 if __name__ == "__main__":
+    app = create_app()
+
     logging.info("=" * 60)
     logging.info("🔧 INITIALISING DATABASE...")
     logging.info("=" * 60)

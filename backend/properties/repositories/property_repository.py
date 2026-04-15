@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Property Repository
-Matches EXACT schema from Property_Master table
+Tenant-scoped database operations for Property_Master.
+
+tenant_id must always be supplied by the service layer from JWT (never from client body).
 """
 import logging
 from typing import Optional, Dict, Any, List
@@ -27,13 +29,9 @@ class PropertyRepository:
             query = f'''
                 SELECT 
                     p.*,
-                    em.employee_name as assigned_agent_name,
-                    sm.stage_name as status_name
+                    em.employee_name AS assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
-                LEFT JOIN "{self.schema}"."Employee_Master" em 
-                    ON p.assigned_agent_id = em.employee_id
-                LEFT JOIN "{self.schema}"."Stage_Master" sm 
-                    ON p.status_id = sm.stage_id
+                LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.is_deleted = FALSE
                   AND p.tenant_id = %s
             '''
@@ -48,7 +46,10 @@ class PropertyRepository:
                     query += " AND p.status_id = %s"
                     params.append(filters["status_id"])
                 if filters.get("agent_id") is not None:
-                    query += " AND p.assigned_agent_id = %s"
+                    query += (
+                        " AND (p.assigned_crm_agent_id = %s OR p.assigned_agent_id = %s)"
+                    )
+                    params.append(filters["agent_id"])
                     params.append(filters["agent_id"])
                 if filters.get("property_type"):
                     query += " AND p.property_type = %s"
@@ -71,13 +72,9 @@ class PropertyRepository:
             query = f'''
                 SELECT 
                     p.*,
-                    em.employee_name as assigned_agent_name,
-                    sm.stage_name as status_name
+                    em.employee_name AS assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
-                LEFT JOIN "{self.schema}"."Employee_Master" em 
-                    ON p.assigned_agent_id = em.employee_id
-                LEFT JOIN "{self.schema}"."Stage_Master" sm 
-                    ON p.status_id = sm.stage_id
+                LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.property_id = %s
                   AND p.tenant_id = %s
                   AND p.is_deleted = FALSE
@@ -98,142 +95,63 @@ class PropertyRepository:
         tenant_id: str,
         status_id: Optional[int],
     ):
-        """Insert property using EXACT column order from schema."""
+        """Insert property; tenant_id from JWT only (passed in)."""
         try:
-            display_id_query = f'''
-                SELECT COALESCE(MAX(display_id), 0) + 1 as next_id
-                FROM "{self.schema}"."Property_Master"
-                WHERE tenant_id = %s AND is_deleted = FALSE
-            '''
-            
-            result = self.supabase.execute_query(display_id_query, (tenant_id,), fetch_one=True)
-            next_display_id = result['next_id'] if result else 1
-            
-            self.logger.info(f"🔢 Next display_id for tenant {tenant_id}: {next_display_id}")
-            
-            occupancy_status = data.get('occupancy_status', 'Vacant')
-            if not occupancy_status or str(occupancy_status).strip() == '':
-                occupancy_status = 'Vacant'
-            
+            now = datetime.utcnow().isoformat()
+
             query = f'''
                 INSERT INTO "{self.schema}"."Property_Master" (
-                    tenant_id,
-                    display_id,
-                    property_name,
-                    address,
-                    city,
-                    postcode,
-                    country_id,
-                    property_type,
-                    occupancy_status,
-                    bedrooms,
-                    bathrooms,
-                    square_feet,
-                    assigned_agent_id,
-                    monthly_rent,
-                    purchase_price,
-                    currency_id,
-                    main_photo_url,
-                    is_active,
-                    is_deleted,
-                    status_id,
-                    created_by,
-                    state,
-                    country,
-                    deposit_amount,
-                    year_built,
-                    lease_start_date,
-                    lease_end_date,
-                    tenant_name,
-                    tenant_contact,
-                    tenant_email,
-                    description,
-                    amenities,
-                    parking_spaces,
-                    pet_friendly,
-                    furnished,
-                    document_details,
-                    rent_due_day
+                    tenant_id, property_name, property_type, address, city,
+                    postcode, country_id, assigned_agent_id, assigned_crm_agent_id, monthly_rent,
+                    purchase_price, currency_id, bedrooms, bathrooms, square_feet,
+                    status_id, main_photo_url, document_details, is_active, is_deleted,
+                    created_at, updated_at, created_by
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING property_id
             '''
 
             params = (
                 tenant_id,
-                next_display_id,                             
-                data.get("property_name"),              
-                data.get("address"),                    
-                data.get("city", ""),                   
-                data.get("postcode", ""),               
-                data.get("country_id", 1),              
-                data.get("property_type", ""),          
-                occupancy_status,                      
-                data.get("bedrooms", 0),                
-                data.get("bathrooms", 0),               
-                data.get("square_feet", 0),             
-                data.get("assigned_agent_id"),         
-                data.get("monthly_rent", 0),            
-                data.get("purchase_price", 0),          
-                data.get("currency_id", 1),           
-                data.get("main_photo_url"),             
-                True,                                   
-                False,                                  
-                status_id,                              
-                created_by,                             
-                data.get("state", ""),                  
-                data.get("country", "UK"),              
-                data.get("deposit_amount", 0),          
-                data.get("year_built"),                 
-                data.get("lease_start_date"),           
-                data.get("lease_end_date"),             
-                data.get("tenant_name"),                
-                data.get("tenant_contact"),             
-                data.get("tenant_email"),               
-                data.get("description"),                
-                data.get("amenities"),                  
-                data.get("parking_spaces", 0),          
-                data.get("pet_friendly", False),        
-                data.get("furnished", False),           
-                data.get("document_details"),           
-                data.get("rent_due_day"),               
+                data.get("property_name"),
+                data.get("property_type", ""),
+                data.get("address"),
+                data.get("city", ""),
+                data.get("postal_code", ""),
+                data.get("country_id", 1),
+                data.get("assigned_agent_id"),
+                data.get("assigned_crm_agent_id"),
+                data.get("monthly_rent", 0),
+                data.get("purchase_price", 0),
+                data.get("currency_id", 1),
+                data.get("bedrooms", 0),
+                data.get("bathrooms", 0),
+                data.get("square_feet", 0),
+                status_id,
+                data.get("main_photo_url"),
+                data.get("document_details"),
+                True,
+                False,
+                now,
+                now,
+                created_by,
             )
 
-            self.logger.info(f"🔧 Creating property: {data.get('property_name')}")
-            self.logger.info(f"📊 Number of columns: 36, Number of params: {len(params)}")
-            
             result = self.supabase.execute_insert(query, params, returning=True)
-            
-            self.logger.info(f"📊 Insert result type: {type(result)}")
-            self.logger.info(f"📊 Insert result value: {result}")
 
-            # Handle different return types from execute_insert
-            property_id = None
-            
-            if isinstance(result, list):
-                if len(result) > 0 and isinstance(result[0], dict):
-                    property_id = result[0].get("property_id")
-                    self.logger.info(f"✅ Extracted property_id from list: {property_id}")
-            elif isinstance(result, dict):
-                property_id = result.get("property_id")
-                self.logger.info(f"✅ Extracted property_id from dict: {property_id}")
+            if result and result.get("property_id"):
+                return self.get_property_by_id(result["property_id"], tenant_id)
 
-            if property_id:
-                self.logger.info(f"✅ Property created with ID: {property_id}")
-                return self.get_property_by_id(property_id, tenant_id)
-            else:
-                self.logger.error(f"❌ Could not extract property_id from result: {result}")
-                return None
+            return None
 
         except Exception as e:
             self.logger.error(f"Error creating property: {str(e)}")
             import traceback
-            self.logger.error(f"Traceback: {traceback.format_exc()}")
+
+            traceback.print_exc()
             raise
 
     def update_property(
@@ -246,50 +164,38 @@ class PropertyRepository:
             update_fields = []
             params: List[Any] = []
 
-            # ✅ Fields that exist in actual schema (INCLUDING occupancy_status and rent_due_day)
             field_mapping = {
                 "property_name": "property_name",
                 "property_type": "property_type",
-                "occupancy_status": "occupancy_status",  
                 "address": "address",
                 "city": "city",
                 "state": "state",
-                "postcode": "postcode",
-                "country": "country",
+                "postal_code": "postcode",
                 "country_id": "country_id",
                 "assigned_agent_id": "assigned_agent_id",
+                "assigned_crm_agent_id": "assigned_crm_agent_id",
                 "monthly_rent": "monthly_rent",
-                "purchase_price": "purchase_price",
                 "deposit_amount": "deposit_amount",
-                "rent_due_day": "rent_due_day",  
+                "purchase_price": "purchase_price",
                 "currency_id": "currency_id",
                 "bedrooms": "bedrooms",
                 "bathrooms": "bathrooms",
                 "square_feet": "square_feet",
-                "year_built": "year_built",
                 "property_status": "property_status",
                 "status_id": "status_id",
                 "main_photo_url": "main_photo_url",
-                "lease_start_date": "lease_start_date",
-                "lease_end_date": "lease_end_date",
-                "tenant_name": "tenant_name",
-                "tenant_contact": "tenant_contact",
-                "tenant_email": "tenant_email",
+                "document_details": "document_details",
                 "description": "description",
                 "amenities": "amenities",
                 "parking_spaces": "parking_spaces",
                 "pet_friendly": "pet_friendly",
                 "furnished": "furnished",
-                "document_details": "document_details",
-                "is_active": "is_active",
-                "photo_urls": "photo_urls",  
+                "tenant_name": "tenant_name",
+                "tenant_contact": "tenant_contact",
+                "tenant_email": "tenant_email",
+                "lease_start_date": "lease_start_date",
+                "lease_end_date": "lease_end_date",
             }
-
-            # ✅ Special handling for occupancy_status to ensure it's never empty
-            if "occupancy_status" in data:
-                occupancy_status = data["occupancy_status"]
-                if not occupancy_status or str(occupancy_status).strip() == '':
-                    data["occupancy_status"] = "Vacant"
 
             for key, db_field in field_mapping.items():
                 if key in data:
@@ -307,8 +213,8 @@ class PropertyRepository:
                 UPDATE "{self.schema}"."Property_Master"
                 SET {', '.join(update_fields)}
                 WHERE property_id = %s
-                AND tenant_id = %s
-                AND is_deleted = FALSE
+                  AND tenant_id = %s
+                  AND is_deleted = FALSE
             '''
 
             self.supabase.execute_update(query, tuple(params))
@@ -321,7 +227,7 @@ class PropertyRepository:
     def delete_property(
         self, property_id: int, deleted_by: int, tenant_id: str
     ) -> bool:
-        """Soft-delete property within tenant and resequence display_ids."""
+        """Soft-delete property within tenant."""
         try:
             now = datetime.utcnow().isoformat()
 
@@ -329,22 +235,15 @@ class PropertyRepository:
                 UPDATE "{self.schema}"."Property_Master"
                 SET is_deleted = TRUE,
                     deleted_at = %s,
-                    deleted_by = %s,
                     updated_at = %s
                 WHERE property_id = %s
-                AND tenant_id = %s
+                  AND tenant_id = %s
             '''
 
             rows = self.supabase.execute_update(
-                query, (now, deleted_by, now, property_id, tenant_id)
+                query, (now, now, property_id, tenant_id)
             )
-            
-            if rows > 0:
-                # ✅ Resequence display_ids after deletion
-                self.resequence_display_ids(tenant_id)
-                return True
-            
-            return False
+            return rows > 0
 
         except Exception as e:
             self.logger.error(f"Error deleting property {property_id}: {str(e)}")
@@ -376,18 +275,14 @@ class PropertyRepository:
     def get_properties_by_agent(
         self, agent_id: int, tenant_id: str
     ) -> List[Dict[str, Any]]:
-        """Properties for an agent within one tenant."""
+        """Properties assigned to legacy employee agent (assigned_agent_id)."""
         try:
             query = f'''
                 SELECT 
                     p.*,
-                    em.employee_name as assigned_agent_name,
-                    sm.stage_name as status_name
+                    em.employee_name as assigned_agent_name
                 FROM "{self.schema}"."Property_Master" p
-                LEFT JOIN "{self.schema}"."Employee_Master" em 
-                    ON p.assigned_agent_id = em.employee_id
-                LEFT JOIN "{self.schema}"."Stage_Master" sm 
-                    ON p.status_id = sm.stage_id
+                LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
                 WHERE p.assigned_agent_id = %s
                   AND p.tenant_id = %s
                   AND p.is_deleted = FALSE
@@ -403,27 +298,28 @@ class PropertyRepository:
             )
             return []
 
-    def resequence_display_ids(self, tenant_id: str) -> bool:
-        """Resequence display_ids after deletion to fill gaps"""
+    def get_properties_by_crm_agent(
+        self, crm_agent_id: int, tenant_id: str
+    ) -> List[Dict[str, Any]]:
+        """Properties assigned via assigned_crm_agent_id (CRM agents table)."""
         try:
             query = f'''
-                WITH numbered AS (
-                    SELECT 
-                        property_id,
-                        ROW_NUMBER() OVER (ORDER BY display_id, property_id) as new_display_id
-                    FROM "{self.schema}"."Property_Master"
-                    WHERE tenant_id = %s AND is_deleted = FALSE
-                )
-                UPDATE "{self.schema}"."Property_Master" pm
-                SET display_id = numbered.new_display_id
-                FROM numbered
-                WHERE pm.property_id = numbered.property_id
+                SELECT 
+                    p.*,
+                    em.employee_name AS assigned_agent_name
+                FROM "{self.schema}"."Property_Master" p
+                LEFT JOIN "{self.schema}"."Employee_Master" em ON p.assigned_agent_id = em.employee_id
+                WHERE p.assigned_crm_agent_id = %s
+                  AND p.tenant_id = %s
+                  AND p.is_deleted = FALSE
+                ORDER BY p.created_at DESC
             '''
-            
-            self.supabase.execute_update(query, (tenant_id,))
-            self.logger.info(f"✅ Resequenced display_ids for tenant {tenant_id}")
-            return True
-            
+
+            result = self.supabase.execute_query(query, (crm_agent_id, tenant_id))
+            return result if result else []
+
         except Exception as e:
-            self.logger.error(f"Error resequencing display_ids: {str(e)}")
-            return False
+            self.logger.error(
+                f"Error fetching properties for CRM agent {crm_agent_id}: {str(e)}"
+            )
+            return []
