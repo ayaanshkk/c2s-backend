@@ -71,7 +71,8 @@ def get_dashboard_overview():
                     THEN p.monthly_rent 
                     ELSE 0 
                 END), 0) as total_monthly_income,
-                COALESCE(AVG(p.monthly_rent), 0) as avg_monthly_rent
+                COALESCE(AVG(p.monthly_rent), 0) as avg_monthly_rent,
+                COALESCE(SUM(p.purchase_price), 0) as total_purchase_value
             FROM "StreemLyne_MT"."Property_Master" p
             LEFT JOIN "StreemLyne_MT"."Stage_Master" s 
                 ON p.status_id = s.stage_id
@@ -96,7 +97,7 @@ def get_dashboard_overview():
         expenses_result = session.execute(expenses_query, {'tenant_id': tenant_id}).first()
         total_expenses = float(expenses_result.total_expenses or 0)
         
-        # ✅ NEW: Get total rent collected (from payments table)
+        # Get total rent collected across all properties
         rent_collected_query = text('''
             SELECT COALESCE(SUM(pp.amount), 0) as total_collected
             FROM "StreemLyne_MT"."Property_Master" p
@@ -110,6 +111,63 @@ def get_dashboard_overview():
         
         rent_collected_result = session.execute(rent_collected_query, {'tenant_id': tenant_id}).first()
         total_rent_collected = float(rent_collected_result.total_collected or 0)
+        
+        # Get total rent pending across all properties (only past months)
+        # Dynamically calculate current financial year
+        now = datetime.now()
+        if now.month >= 4:  # April onwards = current year to next year
+            fy_start = f"{now.year}-04-01"
+            fy_end = f"{now.year + 1}-03-01"
+        else:  # Jan-March = previous year to current year
+            fy_start = f"{now.year - 1}-04-01"
+            fy_end = f"{now.year}-03-01"
+        
+        current_month = now.strftime('%Y-%m')
+        
+        rent_pending_query = text('''
+            WITH month_count AS (
+                SELECT 
+                    p.property_id,
+                    COUNT(*) as months_passed
+                FROM "StreemLyne_MT"."Property_Master" p
+                CROSS JOIN generate_series(
+                    CAST(:fy_start AS date),
+                    LEAST(CURRENT_DATE, CAST(:fy_end AS date)),
+                    '1 month'::interval
+                ) AS month
+                WHERE p.tenant_id = :tenant_id 
+                    AND p.is_deleted = FALSE
+                    AND p.monthly_rent > 0
+                GROUP BY p.property_id
+            )
+            SELECT 
+                p.property_id,
+                p.monthly_rent,
+                COALESCE(mc.months_passed, 0) as months_passed,
+                COALESCE(SUM(pp.amount), 0) as total_paid,
+                (p.monthly_rent * COALESCE(mc.months_passed, 0)) - COALESCE(SUM(pp.amount), 0) as pending
+            FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN month_count mc ON mc.property_id = p.property_id
+            LEFT JOIN "StreemLyne_MT"."Property_Payments" pp
+                ON p.property_id = pp.property_id
+                AND p.tenant_id = pp.tenant_id
+                AND pp.month <= :current_month
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+            AND p.monthly_rent > 0
+            GROUP BY p.property_id, p.monthly_rent, mc.months_passed
+        ''')
+        
+        rent_pending_results = session.execute(
+            rent_pending_query, 
+            {
+                'tenant_id': tenant_id,
+                'fy_start': fy_start,
+                'fy_end': fy_end,
+                'current_month': current_month
+            }
+        ).fetchall()
+        total_rent_pending = sum(max(0, float(r.pending or 0)) for r in rent_pending_results)
         
         # Occupancy rate
         total = stats.total_properties or 1
@@ -142,7 +200,9 @@ def get_dashboard_overview():
                 'occupancy_rate': occupancy_rate,
                 'recent_properties_30d': recent_properties,
                 'total_expenses': total_expenses,
-                'total_rent_collected': total_rent_collected  # ✅ NEW
+                'total_rent_collected': total_rent_collected,
+                'total_rent_pending': total_rent_pending,
+                'total_purchase_value': float(stats.total_purchase_value or 0),  
             }
         }), 200
         

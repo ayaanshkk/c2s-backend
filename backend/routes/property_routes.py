@@ -411,7 +411,15 @@ def Property_Payments_collection(property_id):
                     rows = session.execute(
                         text(
                             f"""
-                            SELECT id as payment_id, month, amount, status, notes, created_at, updated_at
+                            SELECT 
+                                id as payment_id, 
+                                month, 
+                                amount, 
+                                total_rent,
+                                status, 
+                                notes, 
+                                created_at, 
+                                updated_at
                             FROM {PAYMENTS_TABLE}
                             WHERE tenant_id = :tid AND property_id = :pid
                               AND month >= :start_m AND month <= :end_m
@@ -435,7 +443,15 @@ def Property_Payments_collection(property_id):
                 rows = session.execute(
                     text(
                         f"""
-                        SELECT id as payment_id, month, amount, status, notes, created_at, updated_at
+                        SELECT 
+                            id as payment_id, 
+                            month, 
+                            amount, 
+                            total_rent,
+                            status, 
+                            notes, 
+                            created_at, 
+                            updated_at
                         FROM {PAYMENTS_TABLE}
                         WHERE tenant_id = :tid AND property_id = :pid
                         ORDER BY month DESC
@@ -446,10 +462,16 @@ def Property_Payments_collection(property_id):
             
             payments = []
             for r in rows:
+                total = float(r.total_rent) if r.total_rent is not None else 0
+                paid = float(r.amount) if r.amount is not None else 0
+                pending = max(0, total - paid)  # Calculate pending amount
+                
                 payments.append({
                     'payment_id': r.payment_id,
                     'month': r.month,
-                    'amount': float(r.amount) if r.amount is not None else 0,
+                    'amount': paid,
+                    'total_rent': total,
+                    'rent_pending': pending,
                     'status': r.status,
                     'notes': r.notes,
                     'created_at': r.created_at.isoformat() if r.created_at else None,
@@ -479,10 +501,13 @@ def Property_Payments_collection(property_id):
 
         try:
             amount = Decimal(str(data.get('amount', 0)))
+            total_rent = Decimal(str(data.get('total_rent', 0)))  
         except InvalidOperation:
             return jsonify({'success': False, 'error': 'Invalid amount'}), 400
         if amount < 0:
             return jsonify({'success': False, 'error': 'amount must be >= 0'}), 400
+        if total_rent < 0:
+            return jsonify({'success': False, 'error': 'total_rent must be >= 0'}), 400
 
         notes = data.get('notes')
         if notes is not None and not isinstance(notes, str):
@@ -509,6 +534,7 @@ def Property_Payments_collection(property_id):
                 text(f"""
                     UPDATE {PAYMENTS_TABLE}
                     SET amount = :amt, 
+                        total_rent = :total,
                         status = :st, 
                         notes = :notes,
                         updated_at = :ua
@@ -516,6 +542,7 @@ def Property_Payments_collection(property_id):
                 """),
                 {
                     'amt': float(amount),
+                    'total': float(total_rent),
                     'st': raw_status,
                     'notes': notes,
                     'ua': now,
@@ -535,10 +562,10 @@ def Property_Payments_collection(property_id):
                     text(
                         f"""
                         INSERT INTO {PAYMENTS_TABLE} (
-                            tenant_id, property_id, month, amount, status, notes,
+                            tenant_id, property_id, month, amount, total_rent, status, notes,
                             created_at, updated_at
                         )
-                        VALUES (:tid, :pid, :m, :amt, :st, :notes, :ca, :ua)
+                        VALUES (:tid, :pid, :m, :amt, :total, :st, :notes, :ca, :ua)
                         RETURNING id
                         """
                     ),
@@ -547,6 +574,7 @@ def Property_Payments_collection(property_id):
                         'pid': property_id,
                         'm': month,
                         'amt': float(amount),
+                        'total': float(total_rent),  
                         'st': raw_status,
                         'notes': notes,
                         'ca': now,
@@ -577,6 +605,7 @@ def Property_Payments_collection(property_id):
     finally:
         session.close()
 
+
 @property_bp.route('/<int:property_id>/payments/<payment_id>', methods=['PUT', 'OPTIONS'])
 @token_required
 def property_payment_update(property_id, payment_id):
@@ -597,11 +626,14 @@ def property_payment_update(property_id, payment_id):
         
         try:
             amount = Decimal(str(data.get('amount', 0)))
+            total_rent = Decimal(str(data.get('total_rent', 0)))  
         except InvalidOperation:
             return jsonify({'success': False, 'error': 'Invalid amount'}), 400
             
         if amount < 0:
             return jsonify({'success': False, 'error': 'amount must be >= 0'}), 400
+        if total_rent < 0:
+            return jsonify({'success': False, 'error': 'total_rent must be >= 0'}), 400
         
         status = str(data.get('status', '')).strip().upper()
         if status not in ('PAID', 'NOT_PAID'):
@@ -618,6 +650,7 @@ def property_payment_update(property_id, payment_id):
             text(f"""
                 UPDATE {PAYMENTS_TABLE}
                 SET amount = :amt, 
+                    total_rent = :total,
                     status = :st,
                     notes = :notes, 
                     updated_at = :ua
@@ -626,6 +659,7 @@ def property_payment_update(property_id, payment_id):
             """),
             {
                 'amt': float(amount),
+                'total': float(total_rent),  
                 'st': status,
                 'notes': notes,
                 'ua': now,
@@ -1152,6 +1186,92 @@ def fix_occupancy_status():
         
     except Exception as e:
         logger.error(f"Error fixing occupancy status: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    
+@property_bp.route('/recalculate-display-ids', methods=['POST', 'OPTIONS'])
+@token_required
+@require_admin
+def recalculate_display_ids_route():
+    """One-time migration: Set display_ids for existing properties (admin only)"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+
+        from backend.properties.services.property_display_id_service import recalculate_display_ids
+        recalculate_display_ids(tenant_id)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Display IDs recalculated successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error recalculating display IDs: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    
+@property_bp.route('/fix-rent-due-days', methods=['POST', 'OPTIONS'])
+@token_required
+@require_admin
+def fix_rent_due_days():
+    """Set rent_due_day = 10 for all properties with monthly_rent but no rent_due_day (admin only)"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context'
+            }), 403
+
+        session = SessionLocal()
+        try:
+            result = session.execute(
+                text(f"""
+                    UPDATE "{SCHEMA_PM}"."Property_Master"
+                    SET rent_due_day = 10,
+                        updated_at = :updated
+                    WHERE tenant_id = :tid 
+                      AND is_deleted = FALSE
+                      AND monthly_rent IS NOT NULL
+                      AND monthly_rent > 0
+                      AND rent_due_day IS NULL
+                    RETURNING property_id, property_name
+                """),
+                {"tid": tenant_id, "updated": datetime.utcnow()}
+            )
+            
+            updated_properties = result.fetchall()
+            session.commit()
+            
+            logger.info(f"✅ Set rent_due_day for {len(updated_properties)} properties in tenant {tenant_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Updated {len(updated_properties)} properties',
+                'updated_count': len(updated_properties),
+                'properties': [{'id': p.property_id, 'name': p.property_name} for p in updated_properties]
+            }), 200
+            
+        finally:
+            session.close()
+        
+    except Exception as e:
+        logger.error(f"Error fixing rent_due_days: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)

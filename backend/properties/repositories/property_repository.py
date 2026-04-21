@@ -98,24 +98,37 @@ class PropertyRepository:
         """Insert property; tenant_id from JWT only (passed in)."""
         try:
             now = datetime.utcnow().isoformat()
+            
+            display_id_query = f'''
+                SELECT COALESCE(MAX(display_id), 0) + 1 as next_display_id
+                FROM "{self.schema}"."Property_Master"
+                WHERE tenant_id = %s AND is_deleted = FALSE
+            '''
+            display_result = self.supabase.execute_query(display_id_query, (tenant_id,), fetch_one=True)
+            next_display_id = display_result.get('next_display_id', 1) if display_result else 1
 
             query = f'''
                 INSERT INTO "{self.schema}"."Property_Master" (
-                    tenant_id, property_name, property_type, address, city,
-                    postcode, country_id, assigned_agent_id, assigned_crm_agent_id, monthly_rent,
+                    tenant_id, display_id, property_name, property_type, address, city,
+                    postcode, country_id, assigned_agent_id, assigned_crm_agent_id, 
+                    monthly_rent, rent_due_day, deposit_amount,
                     purchase_price, currency_id, bedrooms, bathrooms, square_feet,
                     status_id, main_photo_url, document_details, is_active, is_deleted,
                     created_at, updated_at, created_by
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+                    %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s
                 )
                 RETURNING property_id
             '''
 
             params = (
                 tenant_id,
+                next_display_id,
                 data.get("property_name"),
                 data.get("property_type", ""),
                 data.get("address"),
@@ -125,6 +138,8 @@ class PropertyRepository:
                 data.get("assigned_agent_id"),
                 data.get("assigned_crm_agent_id"),
                 data.get("monthly_rent", 0),
+                data.get("rent_due_day"),
+                data.get("deposit_amount", 0),
                 data.get("purchase_price", 0),
                 data.get("currency_id", 1),
                 data.get("bedrooms", 0),
@@ -150,7 +165,6 @@ class PropertyRepository:
         except Exception as e:
             self.logger.error(f"Error creating property: {str(e)}")
             import traceback
-
             traceback.print_exc()
             raise
 
@@ -167,10 +181,13 @@ class PropertyRepository:
             field_mapping = {
                 "property_name": "property_name",
                 "property_type": "property_type",
+                "occupancy_status": "occupancy_status",
+                "rent_due_day": "rent_due_day",  
                 "address": "address",
                 "city": "city",
                 "state": "state",
                 "postal_code": "postcode",
+                "postcode": "postcode",  
                 "country_id": "country_id",
                 "assigned_agent_id": "assigned_agent_id",
                 "assigned_crm_agent_id": "assigned_crm_agent_id",
@@ -181,10 +198,12 @@ class PropertyRepository:
                 "bedrooms": "bedrooms",
                 "bathrooms": "bathrooms",
                 "square_feet": "square_feet",
+                "year_built": "year_built",  
                 "property_status": "property_status",
                 "status_id": "status_id",
                 "main_photo_url": "main_photo_url",
                 "document_details": "document_details",
+                "photo_urls": "photo_urls",  
                 "description": "description",
                 "amenities": "amenities",
                 "parking_spaces": "parking_spaces",
@@ -213,8 +232,8 @@ class PropertyRepository:
                 UPDATE "{self.schema}"."Property_Master"
                 SET {', '.join(update_fields)}
                 WHERE property_id = %s
-                  AND tenant_id = %s
-                  AND is_deleted = FALSE
+                AND tenant_id = %s
+                AND is_deleted = FALSE
             '''
 
             self.supabase.execute_update(query, tuple(params))
@@ -227,7 +246,7 @@ class PropertyRepository:
     def delete_property(
         self, property_id: int, deleted_by: int, tenant_id: str
     ) -> bool:
-        """Soft-delete property within tenant."""
+        """Soft-delete property within tenant and recalculate display IDs."""
         try:
             now = datetime.utcnow().isoformat()
 
@@ -237,12 +256,23 @@ class PropertyRepository:
                     deleted_at = %s,
                     updated_at = %s
                 WHERE property_id = %s
-                  AND tenant_id = %s
+                AND tenant_id = %s
             '''
 
             rows = self.supabase.execute_update(
                 query, (now, now, property_id, tenant_id)
             )
+            
+            # ✅ AUTOMATIC: Recalculate display_ids after deletion
+            if rows > 0:
+                from backend.properties.services.property_display_id_service import recalculate_display_ids
+                try:
+                    recalculate_display_ids(tenant_id)
+                    self.logger.info(f"✅ Auto-recalculated display IDs after deleting property {property_id}")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to recalculate display IDs after delete: {e}")
+                    # Don't fail the delete operation if recalculation fails
+            
             return rows > 0
 
         except Exception as e:
