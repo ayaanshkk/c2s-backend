@@ -78,8 +78,8 @@ class PropertyService:
             # ✅ FIX: Only validate agent if one is actually being assigned
             # Agent assignment is completely OPTIONAL
             assigned_agent_id = data.get("assigned_agent_id")
-            if assigned_agent_id:  # Only validate if provided and truthy
-                self._ensure_agent_in_tenant(assigned_agent_id, tenant_id)
+            if not assigned_agent_id or assigned_agent_id == 0:
+                data["assigned_agent_id"] = None
 
             status_id = data.get("status_id")
             if status_id is None:
@@ -109,10 +109,16 @@ class PropertyService:
     ) -> Optional[Dict]:
         try:
             data = _strip_tenant_from_payload(data)
-            # ✅ FIX: Only validate agent if one is actually being assigned
-            # Allow setting assigned_agent_id to None/null to unassign
-            if "assigned_agent_id" in data and data.get("assigned_agent_id"):
-                self._ensure_agent_in_tenant(data["assigned_agent_id"], tenant_id)
+            
+            # ✅ ADD THIS: Normalize assigned_agent_id before validation
+            if "assigned_agent_id" in data:
+                assigned_agent_id = data.get("assigned_agent_id")
+                if not assigned_agent_id or assigned_agent_id == 0:
+                    data["assigned_agent_id"] = None
+                else:
+                    # Only validate if we're assigning a real agent
+                    self._ensure_agent_in_tenant(assigned_agent_id, tenant_id)
+            
             return self.property_repo.update_property(property_id, tenant_id, data)
         except Exception as e:
             logger.error(f"Error updating property {property_id}: {e}")
