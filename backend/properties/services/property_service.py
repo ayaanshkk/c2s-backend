@@ -26,10 +26,21 @@ class PropertyService:
         self.user_repo = UserRepository()
 
     def _ensure_agent_in_tenant(self, agent_id: Optional[int], tenant_id: str) -> None:
-        """Cross-tenant guard: assigned employee must belong to JWT tenant."""
-        if agent_id is None:
+        """Cross-tenant guard: assigned employee must belong to JWT tenant.
+        
+        Agent assignment is OPTIONAL - only validate if explicitly provided.
+        """
+        # ✅ FIX: Agent assignment is OPTIONAL - skip validation for None, "", 0, or False
+        if not agent_id:  # Catches None, 0, "", False
             return
-        if not self.user_repo.employee_belongs_to_tenant(int(agent_id), tenant_id):
+        
+        try:
+            agent_id_int = int(agent_id)
+        except (ValueError, TypeError):
+            # If we can't convert to int, treat as "no agent"
+            return
+        
+        if not self.user_repo.employee_belongs_to_tenant(agent_id_int, tenant_id):
             raise PermissionError(
                 "Agent does not belong to this tenant or was not found."
             )
@@ -64,7 +75,11 @@ class PropertyService:
                     f"Missing required fields: {', '.join(missing)}"
                 )
 
-            self._ensure_agent_in_tenant(data.get("assigned_agent_id"), tenant_id)
+            # ✅ FIX: Only validate agent if one is actually being assigned
+            # Agent assignment is completely OPTIONAL
+            assigned_agent_id = data.get("assigned_agent_id")
+            if assigned_agent_id:  # Only validate if provided and truthy
+                self._ensure_agent_in_tenant(assigned_agent_id, tenant_id)
 
             status_id = data.get("status_id")
             if status_id is None:
@@ -94,8 +109,10 @@ class PropertyService:
     ) -> Optional[Dict]:
         try:
             data = _strip_tenant_from_payload(data)
-            if "assigned_agent_id" in data:
-                self._ensure_agent_in_tenant(data.get("assigned_agent_id"), tenant_id)
+            # ✅ FIX: Only validate agent if one is actually being assigned
+            # Allow setting assigned_agent_id to None/null to unassign
+            if "assigned_agent_id" in data and data.get("assigned_agent_id"):
+                self._ensure_agent_in_tenant(data["assigned_agent_id"], tenant_id)
             return self.property_repo.update_property(property_id, tenant_id, data)
         except Exception as e:
             logger.error(f"Error updating property {property_id}: {e}")
@@ -113,10 +130,12 @@ class PropertyService:
             return False
 
     def assign_to_agent(
-        self, property_id: int, agent_id: int, tenant_id: str
+        self, property_id: int, agent_id: Optional[int], tenant_id: str
     ) -> Optional[Dict]:
         try:
-            self._ensure_agent_in_tenant(agent_id, tenant_id)
+            # ✅ FIX: Allow None to unassign agent, only validate if assigning
+            if agent_id:  # Only validate if actually assigning an agent
+                self._ensure_agent_in_tenant(agent_id, tenant_id)
             return self.property_repo.assign_to_agent(
                 property_id, agent_id, tenant_id
             )
@@ -129,6 +148,11 @@ class PropertyService:
     def get_properties_by_agent(
         self, agent_id: int, tenant_id: str
     ) -> List[Dict]:
+        # ✅ NOTE: Here we DO require a valid agent_id since we're querying BY agent
+        # If agent_id is invalid, we should raise an error
+        if not agent_id:
+            raise ValueError("agent_id is required to fetch properties by agent")
+        
         self._ensure_agent_in_tenant(agent_id, tenant_id)
         try:
             return self.property_repo.get_properties_by_agent(agent_id, tenant_id)
