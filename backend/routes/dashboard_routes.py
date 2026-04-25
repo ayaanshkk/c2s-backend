@@ -169,6 +169,18 @@ def get_dashboard_overview():
         ).fetchall()
         total_rent_pending = sum(max(0, float(r.pending or 0)) for r in rent_pending_results)
         
+        # ✅ NEW: Get total mortgage payments across all properties
+        mortgage_query = text('''
+            SELECT COALESCE(SUM(monthly_mortgage_payment), 0) as total_mortgage
+            FROM "StreemLyne_MT"."Property_Master" p
+            WHERE p.tenant_id = :tenant_id 
+            AND p.is_deleted = FALSE
+            AND p.monthly_mortgage_payment IS NOT NULL
+        ''')
+        
+        mortgage_result = session.execute(mortgage_query, {'tenant_id': tenant_id}).first()
+        total_mortgage_payments = float(mortgage_result.total_mortgage or 0)
+        
         # Occupancy rate
         total = stats.total_properties or 1
         occupancy_rate = round((stats.occupied / total * 100), 1) if total > 0 else 0.0
@@ -202,7 +214,8 @@ def get_dashboard_overview():
                 'total_expenses': total_expenses,
                 'total_rent_collected': total_rent_collected,
                 'total_rent_pending': total_rent_pending,
-                'total_purchase_value': float(stats.total_purchase_value or 0),  
+                'total_purchase_value': float(stats.total_purchase_value or 0),
+                'total_mortgage_payments': total_mortgage_payments,  # ✅ NEW
             }
         }), 200
         
@@ -725,6 +738,108 @@ def get_rent_collection_breakdown():
         
     except Exception as e:
         logger.exception("❌ Error fetching rent collection breakdown")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        session.close()
+
+@dashboard_bp.route('/net-profit-breakdown', methods=['GET', 'OPTIONS'])
+@token_required
+def get_net_profit_breakdown():
+    """
+    Get net profit breakdown by property
+    Shows: Rent Collected - Expenses - Mortgage = Net Profit per property
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    session = SessionLocal()
+    
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+            }), 403
+
+        query = text('''
+            SELECT 
+                p.property_id,
+                p.property_name,
+                p.address,
+                p.city,
+                p.monthly_rent,
+                COALESCE(SUM(CASE WHEN pp.status = 'PAID' THEN pp.amount ELSE 0 END), 0) as total_collected,
+                COALESCE(
+                    (SELECT SUM(e.amount) 
+                     FROM "StreemLyne_MT"."Property_Expenses" e 
+                     WHERE e.property_id = p.property_id 
+                     AND e.tenant_id = p.tenant_id), 0
+                ) as total_expenses,
+                COALESCE(p.monthly_mortgage_payment, 0) as monthly_mortgage,
+                (
+                    COALESCE(SUM(CASE WHEN pp.status = 'PAID' THEN pp.amount ELSE 0 END), 0) - 
+                    COALESCE(
+                        (SELECT SUM(e.amount) 
+                         FROM "StreemLyne_MT"."Property_Expenses" e 
+                         WHERE e.property_id = p.property_id 
+                         AND e.tenant_id = p.tenant_id), 0
+                    ) - 
+                    COALESCE(p.monthly_mortgage_payment, 0)
+                ) as net_profit
+            FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN "StreemLyne_MT"."Property_Payments" pp
+                ON p.property_id = pp.property_id
+                AND p.tenant_id = pp.tenant_id
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+            GROUP BY p.property_id, p.property_name, p.address, p.city, p.monthly_rent, p.monthly_mortgage_payment
+            ORDER BY net_profit DESC
+        ''')
+        
+        result = session.execute(query, {'tenant_id': tenant_id}).fetchall()
+        
+        breakdown = []
+        total_collected = 0
+        total_expenses = 0
+        total_mortgage = 0
+        
+        for row in result:
+            collected = float(row.total_collected or 0)
+            expenses = float(row.total_expenses or 0)
+            mortgage = float(row.monthly_mortgage or 0)
+            net = collected - expenses - mortgage
+            
+            breakdown.append({
+                'property_id': row.property_id,
+                'property_name': row.property_name,
+                'address': row.address,
+                'city': row.city,
+                'monthly_rent': float(row.monthly_rent or 0),
+                'total_collected': collected,
+                'total_expenses': expenses,
+                'monthly_mortgage': mortgage,
+                'net_profit': net
+            })
+            
+            total_collected += collected
+            total_expenses += expenses
+            total_mortgage += mortgage
+        
+        return jsonify({
+            'success': True,
+            'breakdown': breakdown,
+            'total_collected': total_collected,
+            'total_expenses': total_expenses,
+            'total_mortgage': total_mortgage,
+            'net_profit': total_collected - total_expenses - total_mortgage
+        }), 200
+        
+    except Exception as e:
+        logger.exception("❌ Error fetching net profit breakdown")
         return jsonify({
             'success': False,
             'error': str(e)
