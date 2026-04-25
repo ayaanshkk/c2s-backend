@@ -113,6 +113,8 @@ class PropertyRepository:
                     postcode, country_id, assigned_agent_id, assigned_crm_agent_id, 
                     monthly_rent, rent_due_day, deposit_amount,
                     purchase_price, currency_id, bedrooms, bathrooms, square_feet,
+                    mortgage_provider, mortgage_rate, mortgage_end_date, monthly_mortgage_payment,
+                    insurance_provider, monthly_insurance_payment,
                     status_id, main_photo_url, document_details, is_active, is_deleted,
                     created_at, updated_at, created_by
                 )
@@ -120,6 +122,8 @@ class PropertyRepository:
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
                     %s, %s, %s,
                     %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s
                 )
@@ -133,7 +137,7 @@ class PropertyRepository:
                 data.get("property_type", ""),
                 data.get("address"),
                 data.get("city", ""),
-                data.get("postal_code", ""),
+                data.get("postcode", data.get("postal_code", "")),  # Handle both postcode/postal_code
                 data.get("country_id", 1),
                 data.get("assigned_agent_id"),
                 data.get("assigned_crm_agent_id"),
@@ -145,6 +149,14 @@ class PropertyRepository:
                 data.get("bedrooms", 0),
                 data.get("bathrooms", 0),
                 data.get("square_feet", 0),
+                # ✅ NEW: Mortgage fields
+                data.get("mortgage_provider"),
+                data.get("mortgage_rate"),
+                data.get("mortgage_end_date"),
+                data.get("monthly_mortgage_payment"),
+                # ✅ NEW: Insurance fields
+                data.get("insurance_provider"),
+                data.get("monthly_insurance_payment"),
                 status_id,
                 data.get("main_photo_url"),
                 data.get("document_details"),
@@ -214,6 +226,14 @@ class PropertyRepository:
                 "tenant_email": "tenant_email",
                 "lease_start_date": "lease_start_date",
                 "lease_end_date": "lease_end_date",
+                # ✅ NEW: Mortgage fields
+                "mortgage_provider": "mortgage_provider",
+                "mortgage_rate": "mortgage_rate",
+                "mortgage_end_date": "mortgage_end_date",
+                "monthly_mortgage_payment": "monthly_mortgage_payment",
+                # ✅ NEW: Insurance fields
+                "insurance_provider": "insurance_provider",
+                "monthly_insurance_payment": "monthly_insurance_payment",
             }
 
             for key, db_field in field_mapping.items():
