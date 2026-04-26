@@ -373,3 +373,72 @@ class PropertyRepository:
                 f"Error fetching properties for CRM agent {crm_agent_id}: {str(e)}"
             )
             return []
+        
+    def regenerate_agent_invite(self, agent_id: int, tenant_id: str) -> dict | None:
+        """
+        Regenerate invite token for an agent with pending invite.
+        Returns None if agent not found or invite already accepted.
+        """
+        from backend.db import SessionLocal
+        from sqlalchemy import text
+        import secrets
+        
+        session = SessionLocal()
+        try:
+            # Check if agent exists and has pending invite
+            check_query = text("""
+                SELECT employee_id, is_invite_pending
+                FROM "StreemLyne_MT"."Employee_Master"
+                WHERE employee_id = :agent_id
+                AND tenant_id = :tenant_id
+                AND is_deleted = FALSE
+            """)
+            
+            result = session.execute(check_query, {
+                'agent_id': agent_id,
+                'tenant_id': tenant_id
+            }).first()
+            
+            if not result:
+                return None
+                
+            if not result.is_invite_pending:
+                return None  # Invite already accepted
+            
+            # Generate new token
+            new_token = secrets.token_urlsafe(32)
+            
+            # Update the token
+            update_query = text("""
+                UPDATE "StreemLyne_MT"."Employee_Master"
+                SET invite_token = :token,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE employee_id = :agent_id
+                AND tenant_id = :tenant_id
+                RETURNING employee_id, employee_name, email, phone, invite_token
+            """)
+            
+            updated = session.execute(update_query, {
+                'agent_id': agent_id,
+                'tenant_id': tenant_id,
+                'token': new_token
+            }).first()
+            
+            session.commit()
+            
+            if updated:
+                return {
+                    'employee_id': updated.employee_id,
+                    'employee_name': updated.employee_name,
+                    'email': updated.email,
+                    'phone': updated.phone,
+                    'invite_token': updated.invite_token
+                }
+            
+            return None
+            
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()

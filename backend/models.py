@@ -123,6 +123,8 @@ class UserMaster(Base):
     employee_id = Column(SmallInteger, nullable=True, index=True)
     user_name = Column(String(255), nullable=True)
     password = Column(String(255), nullable=True)
+    is_invite_pending = Column(Boolean, default=True)
+    invite_token = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=True)
     updated_at = Column(Date, nullable=True)
 
@@ -152,6 +154,8 @@ class UserMaster(Base):
             'role': getattr(self, 'role', None),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'is_active': self.is_active,
+            'invite_token': self.invite_token,
+            'is_invite_pending': self.is_invite_pending,
         }
 
 

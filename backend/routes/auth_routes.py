@@ -454,3 +454,178 @@ def refresh_token():
     except Exception as e:
         logger.exception(f"Error refreshing token: {e}")
         return jsonify({'error': str(e)}), 500
+    
+@auth_bp.route('/verify-invite/<token>', methods=['GET'])
+def verify_invite_token(token):
+    """Verify if an invite token is valid"""
+    session = SessionLocal()
+    try:
+        # Check if token exists and is still pending
+        verify_sql = text('''
+            SELECT 
+                um.user_id,
+                um.employee_id,
+                um.is_invite_pending,
+                em.employee_name,
+                em.email,
+                em.phone,
+                em.tenant_id
+            FROM "StreemLyne_MT"."User_Master" um
+            JOIN "StreemLyne_MT"."Employee_Master" em 
+                ON um.employee_id = em.employee_id
+            WHERE um.invite_token = :token
+            AND um.is_invite_pending = TRUE
+            LIMIT 1
+        ''')
+        
+        result = session.execute(verify_sql, {'token': token}).mappings().first()
+        
+        if not result:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid or expired invite token'
+            }), 404
+        
+        return jsonify({
+            'success': True,
+            'agent': {
+                'employee_id': result['employee_id'],
+                'employee_name': result['employee_name'],
+                'email': result['email'],
+                'phone': result['phone']
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error verifying invite token: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+@auth_bp.route('/accept-invite', methods=['POST'])
+def accept_invite():
+    """Accept invite and set password"""
+    session = SessionLocal()
+    try:
+        data = request.get_json() or {}
+        token = data.get('token')
+        username = data.get('username', '').strip()
+        password = data.get('password')
+        
+        if not token or not username or not password:
+            return jsonify({
+                'success': False,
+                'error': 'Token, username, and password are required'
+            }), 400
+        
+        # Validate password
+        is_valid, message = validate_password(password)
+        if not is_valid:
+            return jsonify({'success': False, 'error': message}), 400
+        
+        # Verify token and get user
+        verify_sql = text('''
+            SELECT 
+                um.user_id,
+                um.employee_id,
+                um.is_invite_pending,
+                em.employee_name,
+                em.email,
+                em.tenant_id
+            FROM "StreemLyne_MT"."User_Master" um
+            JOIN "StreemLyne_MT"."Employee_Master" em 
+                ON um.employee_id = em.employee_id
+            WHERE um.invite_token = :token
+            AND um.is_invite_pending = TRUE
+            LIMIT 1
+        ''')
+        
+        result = session.execute(verify_sql, {'token': token}).mappings().first()
+        
+        if not result:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid or expired invite token'
+            }), 404
+        
+        # Check if username already exists
+        username_check = text('''
+            SELECT 1 FROM "StreemLyne_MT"."User_Master" 
+            WHERE user_name = :username 
+            AND user_id != :user_id
+            LIMIT 1
+        ''')
+        
+        if session.execute(username_check, {
+            'username': username,
+            'user_id': result['user_id']
+        }).first():
+            return jsonify({
+                'success': False,
+                'error': 'Username already exists'
+            }), 400
+        
+        # Update user with username, password, and mark invite as accepted
+        update_sql = text('''
+            UPDATE "StreemLyne_MT"."User_Master"
+            SET user_name = :username,
+                password = :password,
+                is_invite_pending = FALSE,
+                invite_token = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = :user_id
+            RETURNING user_id, employee_id, user_name
+        ''')
+        
+        updated = session.execute(update_sql, {
+            'username': username,
+            'password': password,
+            'user_id': result['user_id']
+        }).mappings().first()
+        
+        session.commit()
+        
+        if not updated:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to accept invite'
+            }), 500
+        
+        # Generate JWT token
+        tenant_slug = normalize_tenant_id(result['tenant_id'])
+        payload = {
+            'user_id': updated['user_id'],
+            'employee_id': updated['employee_id'],
+            'tenant_id': tenant_slug,
+            'user_name': updated['user_name'],
+            'exp': datetime.utcnow() + timedelta(days=7),
+            'iat': datetime.utcnow()
+        }
+        
+        auth_token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+        
+        user_data = {
+            'user_id': updated['user_id'],
+            'employee_id': updated['employee_id'],
+            'user_name': updated['user_name'],
+            'tenant_id': tenant_slug,
+            'email': result['email'],
+            'name': result['employee_name']
+        }
+        
+        logger.info(f"✅ Invite accepted: user_id={updated['user_id']} username={username}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Invite accepted successfully',
+            'token': auth_token,
+            'user': user_data
+        }), 200
+        
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error accepting invite: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        session.close()

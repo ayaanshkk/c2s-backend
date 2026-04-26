@@ -290,78 +290,78 @@ class UserRepository:
             self.logger.error("Error fetching agent %s: %s", agent_id, e)
             return None
 
-    def create_employee_agent(
-        self, tenant_id: str, employee_name: str, email: str = None, phone: str = None
-    ) -> Optional[Dict[str, Any]]:
-        """Create employee and user with invite pending (NO username/password set yet)"""
-        if not tenant_id or not employee_name or not phone:
-            return None
-
-        AGENT_ROLE_ID = 3
-
+    def create_employee_agent(self, tenant_id: str, name: str, email: str | None, phone: str) -> dict:
+        """Create employee and user with invite token and assign agent role"""
+        from backend.db import SessionLocal
+        from sqlalchemy import text
+        import secrets
+        
+        session = SessionLocal()
         try:
-            # Create employee record
-            emp = self.supabase.execute_insert(
-                f'''
-                INSERT INTO "{self.schema}"."Employee_Master"
-                    (tenant_id, employee_name, email, phone)
-                VALUES (%s, %s, %s, %s)
+            # Insert employee
+            insert_emp = text('''
+                INSERT INTO "StreemLyne_MT"."Employee_Master" (tenant_id, employee_name, email, phone)
+                VALUES (:tenant_id, :employee_name, :email, :phone)
                 RETURNING employee_id, employee_name, email, phone
-                ''',
-                (tenant_id, employee_name.strip(), email.strip() if email else None, phone.strip()),
-                returning=True,
-            )
-
-            if not emp or not emp.get("employee_id"):
-                self.logger.error("Employee_Master insert returned no row")
-                return None
-
-            employee_id = emp["employee_id"]
-            self.logger.info("Created employee_id=%s", employee_id)
-
+            ''')
+            
+            emp_row = session.execute(insert_emp, {
+                'tenant_id': tenant_id,
+                'employee_name': name,
+                'email': email,
+                'phone': phone
+            }).mappings().first()
+            
+            if not emp_row:
+                raise Exception('Failed to create employee')
+            
+            employee_id = emp_row['employee_id']
+            
             # Generate invite token
             invite_token = secrets.token_urlsafe(32)
-
-            # Create user record WITHOUT username/password (will be set when invite is accepted)
-            user = self.supabase.execute_insert(
-                f'''
-                INSERT INTO "{self.schema}"."User_Master"
-                    (employee_id, user_name, password, is_invite_pending, invite_token)
-                VALUES (%s, NULL, NULL, TRUE, %s)
+            
+            # Create User_Master record with invite pending
+            insert_user = text('''
+                INSERT INTO "StreemLyne_MT"."User_Master" 
+                (employee_id, invite_token, is_invite_pending)
+                VALUES (:employee_id, :invite_token, TRUE)
                 RETURNING user_id
-                ''',
-                (employee_id, invite_token),
-                returning=True,
-            )
-
-            if not user or not user.get("user_id"):
-                self.logger.warning("User_Master insert returned no row for employee_id=%s", employee_id)
-                return emp
-
-            user_id = user["user_id"]
-            self.logger.info("Created user_id=%s with invite_token", user_id)
-
-            # Assign Agent role
-            self.supabase.execute_insert(
-                f'''
-                INSERT INTO "{self.schema}"."User_Role_Mapping" (user_id, role_id)
-                VALUES (%s, %s)
-                ON CONFLICT DO NOTHING
-                ''',
-                (user_id, AGENT_ROLE_ID),
-                returning=False,
-            )
-
+            ''')
+            
+            user_row = session.execute(insert_user, {
+                'employee_id': employee_id,
+                'invite_token': invite_token
+            }).mappings().first()
+            
+            if not user_row:
+                raise Exception('Failed to create user record')
+            
+            user_id = user_row['user_id']
+            
+            # ✅ ADD THIS: Assign agent role (role_id = 3)
+            insert_role = text('''
+                INSERT INTO "StreemLyne_MT"."User_Role_Mapping" (user_id, role_id)
+                VALUES (:user_id, 3)
+            ''')
+            
+            session.execute(insert_role, {'user_id': user_id})
+            
+            session.commit()
+            
             return {
-                **emp,
-                "user_id": user_id,
-                "is_invite_pending": True,
-                "invite_token": invite_token,
+                'employee_id': employee_id,
+                'employee_name': emp_row['employee_name'],
+                'email': emp_row['email'],
+                'phone': emp_row['phone'],
+                'invite_token': invite_token,
+                'is_invite_pending': True
             }
-
+            
         except Exception as e:
-            self.logger.error("create_employee_agent failed: %s", e)
-            raise
+            session.rollback()
+            raise e
+        finally:
+            session.close()
 
 
     def complete_invite_acceptance(self, user_id: int, username: str, password: str) -> bool:
@@ -426,6 +426,83 @@ class UserRepository:
             (token,),
         )
         return rows[0] if rows else None
+    
+    def regenerate_agent_invite(self, agent_id: int, tenant_id: str) -> dict | None:
+        """
+        Regenerate invite token for an agent with pending invite.
+        Returns None if agent not found or invite already accepted.
+        """
+        from backend.db import SessionLocal
+        from sqlalchemy import text
+        import secrets
+        
+        session = SessionLocal()
+        try:
+            # Check if there's a User_Master record with pending invite for this employee
+            check_query = text("""
+                SELECT 
+                    um.user_id,
+                    um.employee_id,
+                    um.invite_token,
+                    um.is_invite_pending,
+                    em.employee_name,
+                    em.email,
+                    em.phone
+                FROM "StreemLyne_MT"."User_Master" um
+                JOIN "StreemLyne_MT"."Employee_Master" em
+                    ON um.employee_id = em.employee_id
+                WHERE um.employee_id = :agent_id
+                AND em.tenant_id = :tenant_id
+            """)
+            
+            result = session.execute(check_query, {
+                'agent_id': agent_id,
+                'tenant_id': tenant_id
+            }).first()
+            
+            if not result:
+                # No user record found for this employee
+                return None
+            
+            if not result.is_invite_pending:
+                # Invite already accepted
+                return None
+            
+            # Generate new token
+            new_token = secrets.token_urlsafe(32)
+            
+            # Update the token
+            update_query = text("""
+                UPDATE "StreemLyne_MT"."User_Master"
+                SET invite_token = :token,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE employee_id = :agent_id
+                RETURNING user_id, employee_id, invite_token
+            """)
+            
+            updated = session.execute(update_query, {
+                'agent_id': agent_id,
+                'token': new_token
+            }).first()
+            
+            session.commit()
+            
+            if updated:
+                return {
+                    'employee_id': result.employee_id,
+                    'employee_name': result.employee_name,
+                    'email': result.email,
+                    'phone': result.phone,
+                    'invite_token': updated.invite_token
+                }
+            
+            return None
+            
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
 
 
     def delete_agent(self, agent_id: int, tenant_id: str) -> None:

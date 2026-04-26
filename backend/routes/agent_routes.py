@@ -134,31 +134,62 @@ def get_agent_stats(agent_id):
                 'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
             }), 403
 
-        from backend.properties.services.property_service import PropertyService
-
-        service = PropertyService()
-        properties = service.get_properties_by_agent(agent_id, tenant_id)
-
-        total_properties = len(properties) if properties else 0
-        available = sum(1 for p in properties if p.get('status_name', '').lower() == 'available') if properties else 0
-        occupied = sum(1 for p in properties if p.get('status_name', '').lower() == 'occupied') if properties else 0
-        maintenance = sum(1 for p in properties if p.get('status_name', '').lower() == 'under maintenance') if properties else 0
-        total_income = sum(p.get('monthly_rent', 0) or 0 for p in properties if p.get('status_name', '').lower() == 'occupied') if properties else 0
-
-        stats = {
-            'agent_id': agent_id,
-            'total_properties': total_properties,
-            'available': available,
-            'occupied': occupied,
-            'under_maintenance': maintenance,
-            'monthly_income': total_income,
-            'occupancy_rate': round((occupied / total_properties * 100), 2) if total_properties > 0 else 0
-        }
+        from backend.db import SessionLocal
+        from sqlalchemy import text
         
-        return jsonify({
-            'success': True,
-            'stats': stats
-        }), 200
+        session = SessionLocal()
+        
+        try:
+            # Get agent stats with correct occupancy_status field
+            stats_query = text('''
+                SELECT 
+                    COUNT(*) as total_properties,
+                    COUNT(CASE WHEN p.occupancy_status = 'Occupied' THEN 1 END) as occupied,
+                    COUNT(CASE WHEN s.stage_name = 'Available' THEN 1 END) as available,
+                    COUNT(CASE WHEN s.stage_name = 'Under Maintenance' THEN 1 END) as maintenance,
+                    COALESCE(SUM(CASE 
+                        WHEN p.occupancy_status = 'Occupied' AND p.monthly_rent IS NOT NULL 
+                        THEN p.monthly_rent 
+                        ELSE 0 
+                    END), 0) as total_monthly_income
+                FROM "StreemLyne_MT"."Property_Master" p
+                LEFT JOIN "StreemLyne_MT"."Stage_Master" s 
+                    ON p.status_id = s.stage_id
+                WHERE p.tenant_id = :tenant_id
+                AND p.assigned_agent_id = :agent_id
+                AND p.is_deleted = FALSE
+            ''')
+            
+            result = session.execute(stats_query, {
+                'tenant_id': tenant_id,
+                'agent_id': agent_id
+            }).first()
+            
+            total_properties = int(result.total_properties or 0)
+            occupied = int(result.occupied or 0)
+            available = int(result.available or 0)
+            maintenance = int(result.maintenance or 0)
+            total_income = float(result.total_monthly_income or 0)
+            
+            occupancy_rate = round((occupied / total_properties * 100), 1) if total_properties > 0 else 0.0
+
+            stats = {
+                'agent_id': agent_id,
+                'total_properties': total_properties,
+                'available': available,
+                'occupied': occupied,
+                'under_maintenance': maintenance,
+                'monthly_income': total_income,
+                'occupancy_rate': occupancy_rate
+            }
+            
+            return jsonify({
+                'success': True,
+                'stats': stats
+            }), 200
+            
+        finally:
+            session.close()
 
     except PermissionError as e:
         return jsonify({'success': False, 'error': str(e)}), 403
@@ -251,4 +282,49 @@ def delete_agent(agent_id):
 
     except Exception as e:
         logger.error('Error deleting agent %s: %s', agent_id, e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@agent_bp.route('/<int:agent_id>/regenerate-invite', methods=['POST', 'OPTIONS'])
+@token_required
+def regenerate_invite(agent_id):
+    """Regenerate invite token and link for an agent with pending invite"""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+            }), 403
+
+        repo = UserRepository()
+        result = repo.regenerate_agent_invite(agent_id, tenant_id)
+        
+        if not result:
+            return jsonify({
+                'success': False,
+                'error': 'Agent not found or invite already accepted'
+            }), 404
+
+        # Build invite link
+        invite_token = result.get("invite_token")
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        invite_link = (
+            f"{frontend_url}/accept-invite?token={invite_token}"
+            if invite_token else None
+        )
+
+        logger.info(f"Invite regenerated for agent {agent_id} — token={invite_token}")
+
+        return jsonify({
+            'success': True,
+            'invite_link': invite_link,
+            'invite_token': invite_token,
+            'message': 'Invite link regenerated successfully',
+        }), 200
+
+    except Exception as e:
+        logger.error(f'Error regenerating invite for agent {agent_id}: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
