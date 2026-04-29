@@ -563,6 +563,7 @@ class Property_Master(Base):
     monthly_rent = Column(Numeric(10, 2), nullable=True)
     deposit_amount = Column(Numeric(10, 2), nullable=True)
     purchase_price = Column(Numeric(10, 2), nullable=True)
+    current_market_value = Column(Numeric(12, 2))
     currency_id = Column(SmallInteger, ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=True, default=1)
     
     # ── Property specifications ──────────────────────────────────────────────
@@ -620,6 +621,7 @@ class Property_Master(Base):
             'monthly_rent': float(self.monthly_rent) if self.monthly_rent else None,
             'deposit_amount': float(self.deposit_amount) if self.deposit_amount else None,
             'purchase_price': float(self.purchase_price) if self.purchase_price else None,
+            'current_market_value': float(self.current_market_value) if self.current_market_value else None,
             'currency_id': self.currency_id,
             'bedrooms': self.bedrooms,
             'bathrooms': self.bathrooms,

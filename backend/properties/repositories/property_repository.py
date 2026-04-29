@@ -113,7 +113,7 @@ class PropertyRepository:
                     occupancy_status, address, city,
                     postcode, country_id, assigned_agent_id, assigned_crm_agent_id, 
                     monthly_rent, rent_due_day, deposit_amount,
-                    purchase_price, currency_id, bedrooms, bathrooms, square_feet,
+                    purchase_price, current_market_value, currency_id, bedrooms, bathrooms, square_feet,
                     mortgage_provider, mortgage_rate, mortgage_end_date, monthly_mortgage_payment,
                     insurance_provider, monthly_insurance_payment,
                     status_id, main_photo_url, document_details, is_active, is_deleted,
@@ -124,7 +124,7 @@ class PropertyRepository:
                     %s, %s, %s,
                     %s, %s, %s, %s, 
                     %s, %s, %s,
-                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, %s, %s, %s,
@@ -138,8 +138,8 @@ class PropertyRepository:
                 next_display_id,
                 data.get("property_name"),
                 data.get("property_type", ""),
-                data.get("property_purchase_name"),  
-                data.get("occupancy_status", "Vacant"),
+                data.get("property_purchase_name"),
+                data.get("occupancy_status", "Vacant"),  # ✅ Added with default
                 data.get("address"),
                 data.get("city", ""),
                 data.get("postcode", data.get("postal_code", "")),
@@ -150,16 +150,17 @@ class PropertyRepository:
                 data.get("rent_due_day"),
                 data.get("deposit_amount", 0),
                 data.get("purchase_price", 0),
+                data.get("current_market_value"),  # ✅ ADD THIS
                 data.get("currency_id", 1),
                 data.get("bedrooms", 0),
                 data.get("bathrooms", 0),
                 data.get("square_feet", 0),
-                # ✅ Mortgage fields
+                # Mortgage fields
                 data.get("mortgage_provider"),
                 data.get("mortgage_rate"),
                 data.get("mortgage_end_date"),
                 data.get("monthly_mortgage_payment"),
-                # ✅ Insurance fields
+                # Insurance fields
                 data.get("insurance_provider"),
                 data.get("monthly_insurance_payment"),
                 status_id,
@@ -212,6 +213,7 @@ class PropertyRepository:
                 "monthly_rent": "monthly_rent",
                 "deposit_amount": "deposit_amount",
                 "purchase_price": "purchase_price",
+                "current_market_value": "current_market_value",  # ✅ ADD THIS
                 "currency_id": "currency_id",
                 "bedrooms": "bedrooms",
                 "bathrooms": "bathrooms",
@@ -232,12 +234,12 @@ class PropertyRepository:
                 "tenant_email": "tenant_email",
                 "lease_start_date": "lease_start_date",
                 "lease_end_date": "lease_end_date",
-                # ✅ NEW: Mortgage fields
+                # Mortgage fields
                 "mortgage_provider": "mortgage_provider",
                 "mortgage_rate": "mortgage_rate",
                 "mortgage_end_date": "mortgage_end_date",
                 "monthly_mortgage_payment": "monthly_mortgage_payment",
-                # ✅ NEW: Insurance fields
+                # Insurance fields
                 "insurance_provider": "insurance_provider",
                 "monthly_insurance_payment": "monthly_insurance_payment",
             }

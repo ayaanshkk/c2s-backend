@@ -115,6 +115,7 @@ def get_properties():
                 p.assigned_agent_id,
                 em.employee_name as assigned_agent_name,
                 p.property_purchase_name,
+                p.current_market_value,
                 p.monthly_rent,
                 p.deposit_amount,
                 p.purchase_price,

@@ -72,7 +72,8 @@ def get_dashboard_overview():
                     ELSE 0 
                 END), 0) as total_monthly_income,
                 COALESCE(AVG(p.monthly_rent), 0) as avg_monthly_rent,
-                COALESCE(SUM(p.purchase_price), 0) as total_purchase_value
+                COALESCE(SUM(p.purchase_price), 0) as total_purchase_value,
+                COALESCE(SUM(p.current_market_value), 0) as total_current_market_value
             FROM "StreemLyne_MT"."Property_Master" p
             LEFT JOIN "StreemLyne_MT"."Stage_Master" s 
                 ON p.status_id = s.stage_id
@@ -169,17 +170,30 @@ def get_dashboard_overview():
         ).fetchall()
         total_rent_pending = sum(max(0, float(r.pending or 0)) for r in rent_pending_results)
         
-        # ✅ NEW: Get total mortgage payments across all properties
+        # ✅ Get total mortgage payments across all properties
+        # Calculate based on months where rent was PAID
         mortgage_query = text('''
-            SELECT COALESCE(SUM(monthly_mortgage_payment), 0) as total_mortgage
+            SELECT 
+                p.property_id,
+                p.monthly_mortgage_payment,
+                COUNT(pp.id) as months_paid
             FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN "StreemLyne_MT"."Property_Payments" pp
+                ON p.property_id = pp.property_id
+                AND p.tenant_id = pp.tenant_id
+                AND pp.status = 'PAID'
             WHERE p.tenant_id = :tenant_id 
             AND p.is_deleted = FALSE
             AND p.monthly_mortgage_payment IS NOT NULL
+            AND p.monthly_mortgage_payment > 0
+            GROUP BY p.property_id, p.monthly_mortgage_payment
         ''')
-        
-        mortgage_result = session.execute(mortgage_query, {'tenant_id': tenant_id}).first()
-        total_mortgage_payments = float(mortgage_result.total_mortgage or 0)
+
+        mortgage_results = session.execute(mortgage_query, {'tenant_id': tenant_id}).fetchall()
+        total_mortgage_payments = sum(
+            float(r.monthly_mortgage_payment or 0) * (r.months_paid or 0) 
+            for r in mortgage_results
+        )
         
         # Occupancy rate
         total = stats.total_properties or 1
@@ -215,7 +229,8 @@ def get_dashboard_overview():
                 'total_rent_collected': total_rent_collected,
                 'total_rent_pending': total_rent_pending,
                 'total_purchase_value': float(stats.total_purchase_value or 0),
-                'total_mortgage_payments': total_mortgage_payments,  # ✅ NEW
+                'total_current_market_value': float(stats.total_current_market_value or 0),  # ✅ NEW
+                'total_mortgage_payments': total_mortgage_payments,  # ✅ UPDATED CALCULATION
             }
         }), 200
         
