@@ -109,7 +109,8 @@ class PropertyRepository:
 
             query = f'''
                 INSERT INTO "{self.schema}"."Property_Master" (
-                    tenant_id, display_id, property_name, property_type, address, city,
+                    tenant_id, display_id, property_name, property_type, property_purchase_name, 
+                    occupancy_status, address, city,
                     postcode, country_id, assigned_agent_id, assigned_crm_agent_id, 
                     monthly_rent, rent_due_day, deposit_amount,
                     purchase_price, currency_id, bedrooms, bathrooms, square_feet,
@@ -119,7 +120,9 @@ class PropertyRepository:
                     created_at, updated_at, created_by
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+                    %s, %s, %s, %s, %s, 
+                    %s, %s, %s,
+                    %s, %s, %s, %s, 
                     %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
@@ -135,9 +138,11 @@ class PropertyRepository:
                 next_display_id,
                 data.get("property_name"),
                 data.get("property_type", ""),
+                data.get("property_purchase_name"),  
+                data.get("occupancy_status", "Vacant"),
                 data.get("address"),
                 data.get("city", ""),
-                data.get("postcode", data.get("postal_code", "")),  # Handle both postcode/postal_code
+                data.get("postcode", data.get("postal_code", "")),
                 data.get("country_id", 1),
                 data.get("assigned_agent_id"),
                 data.get("assigned_crm_agent_id"),
@@ -149,12 +154,12 @@ class PropertyRepository:
                 data.get("bedrooms", 0),
                 data.get("bathrooms", 0),
                 data.get("square_feet", 0),
-                # ✅ NEW: Mortgage fields
+                # ✅ Mortgage fields
                 data.get("mortgage_provider"),
                 data.get("mortgage_rate"),
                 data.get("mortgage_end_date"),
                 data.get("monthly_mortgage_payment"),
-                # ✅ NEW: Insurance fields
+                # ✅ Insurance fields
                 data.get("insurance_provider"),
                 data.get("monthly_insurance_payment"),
                 status_id,
@@ -193,6 +198,7 @@ class PropertyRepository:
             field_mapping = {
                 "property_name": "property_name",
                 "property_type": "property_type",
+                "property_purchase_name": "property_purchase_name",
                 "occupancy_status": "occupancy_status",
                 "rent_due_day": "rent_due_day",  
                 "address": "address",

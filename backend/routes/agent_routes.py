@@ -220,6 +220,7 @@ def create_agent():
 
         data = request.get_json() or {}
         name = (data.get('employee_name') or data.get('name') or '').strip()
+        company_name = (data.get('company_name') or '').strip() or None  # ✅ Extract company_name
         email = (data.get('email') or '').strip() or None
         phone = (data.get('phone') or '').strip()
 
@@ -229,7 +230,7 @@ def create_agent():
             return jsonify({'success': False, 'error': 'phone is required'}), 400
 
         repo = UserRepository()
-        row = repo.create_employee_agent(tenant_id, name, email, phone)
+        row = repo.create_employee_agent(tenant_id, name, company_name, email, phone)  # ✅ Pass company_name
         if not row:
             return jsonify({'success': False, 'error': 'Could not create agent'}), 500
 
@@ -258,6 +259,48 @@ def create_agent():
                 'error': 'An agent with this phone number or email already exists',
             }), 409
         logger.error('Error creating agent: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@agent_bp.route('/<int:agent_id>', methods=['PUT', 'OPTIONS'])
+@token_required
+def update_agent(agent_id):
+    """Update agent details"""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+            }), 403
+
+        data = request.get_json() or {}
+        name = (data.get('employee_name') or '').strip()
+        company_name = (data.get('company_name') or '').strip() or None
+        email = (data.get('email') or '').strip() or None
+        phone = (data.get('phone') or '').strip()
+
+        if not name:
+            return jsonify({'success': False, 'error': 'employee_name is required'}), 400
+        if not phone:
+            return jsonify({'success': False, 'error': 'phone is required'}), 400
+
+        repo = UserRepository()
+        updated = repo.update_agent(agent_id, tenant_id, name, company_name, email, phone)
+        
+        if not updated:
+            return jsonify({'success': False, 'error': 'Agent not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'agent': updated,
+            'message': 'Agent updated successfully',
+        }), 200
+
+    except Exception as e:
+        logger.error(f'Error updating agent {agent_id}: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

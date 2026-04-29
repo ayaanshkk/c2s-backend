@@ -290,7 +290,7 @@ class UserRepository:
             self.logger.error("Error fetching agent %s: %s", agent_id, e)
             return None
 
-    def create_employee_agent(self, tenant_id: str, name: str, email: str | None, phone: str) -> dict:
+    def create_employee_agent(self, tenant_id: str, name: str, company_name: str | None, email: str | None, phone: str) -> dict:
         """Create employee and user with invite token and assign agent role"""
         from backend.db import SessionLocal
         from sqlalchemy import text
@@ -298,16 +298,18 @@ class UserRepository:
         
         session = SessionLocal()
         try:
-            # Insert employee
+            # Insert employee (company_name is optional)
             insert_emp = text('''
-                INSERT INTO "StreemLyne_MT"."Employee_Master" (tenant_id, employee_name, email, phone)
-                VALUES (:tenant_id, :employee_name, :email, :phone)
-                RETURNING employee_id, employee_name, email, phone
+                INSERT INTO "StreemLyne_MT"."Employee_Master" 
+                (tenant_id, employee_name, company_name, email, phone)
+                VALUES (:tenant_id, :employee_name, :company_name, :email, :phone)
+                RETURNING employee_id, employee_name, company_name, email, phone
             ''')
             
             emp_row = session.execute(insert_emp, {
                 'tenant_id': tenant_id,
                 'employee_name': name,
+                'company_name': company_name,  # ✅ Can be None
                 'email': email,
                 'phone': phone
             }).mappings().first()
@@ -338,7 +340,7 @@ class UserRepository:
             
             user_id = user_row['user_id']
             
-            # ✅ ADD THIS: Assign agent role (role_id = 3)
+            # Assign agent role (role_id = 3)
             insert_role = text('''
                 INSERT INTO "StreemLyne_MT"."User_Role_Mapping" (user_id, role_id)
                 VALUES (:user_id, 3)
@@ -351,10 +353,59 @@ class UserRepository:
             return {
                 'employee_id': employee_id,
                 'employee_name': emp_row['employee_name'],
+                'company_name': emp_row['company_name'],  # ✅ Include in response (can be None)
                 'email': emp_row['email'],
                 'phone': emp_row['phone'],
                 'invite_token': invite_token,
                 'is_invite_pending': True
+            }
+            
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def update_agent(self, agent_id: int, tenant_id: str, name: str, company_name: str | None, email: str | None, phone: str) -> dict | None:
+        """Update agent details"""
+        from backend.db import SessionLocal
+        from sqlalchemy import text
+        
+        session = SessionLocal()
+        try:
+            # Update employee record
+            update_query = text('''
+                UPDATE "StreemLyne_MT"."Employee_Master"
+                SET employee_name = :employee_name,
+                    company_name = :company_name,
+                    email = :email,
+                    phone = :phone,
+                    updated_on = CURRENT_TIMESTAMP
+                WHERE employee_id = :employee_id
+                AND tenant_id = :tenant_id
+                RETURNING employee_id, employee_name, company_name, email, phone
+            ''')
+            
+            result = session.execute(update_query, {
+                'employee_id': agent_id,
+                'tenant_id': tenant_id,
+                'employee_name': name,
+                'company_name': company_name,
+                'email': email,
+                'phone': phone
+            }).mappings().first()
+            
+            if not result:
+                return None
+            
+            session.commit()
+            
+            return {
+                'employee_id': result['employee_id'],
+                'employee_name': result['employee_name'],
+                'company_name': result['company_name'],
+                'email': result['email'],
+                'phone': result['phone']
             }
             
         except Exception as e:

@@ -186,6 +186,7 @@ class Employee_Master(Base):
     employee_id = Column(SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = Column(String(128), nullable=True)
     employee_name = Column(String(255))
+    company_name = Column(String(255), nullable=True)  # ✅ ADD THIS LINE
     employee_designation_id = Column(SmallInteger)
     phone = Column(String(50))
     email = Column(String(255))
@@ -545,6 +546,7 @@ class Property_Master(Base):
     # ── Property details ─────────────────────────────────────────────────────
     property_name = Column(String(255), nullable=False)
     property_type = Column(String(50), nullable=True)  # apartment, house, commercial, etc.
+    property_purchase_name = Column(String(255), nullable=True)  # ✅ ADD THIS LINE
     address = Column(String(500), nullable=False)
     city = Column(String(100), nullable=True, index=True)
     state = Column(String(100), nullable=True)
@@ -585,10 +587,10 @@ class Property_Master(Base):
     
     # ── Documents and media ──────────────────────────────────────────────────
     document_details = Column(Text, nullable=True)  # JSON array of document URLs
-    main_photo_url = Column(Text, nullable=True)  # ✅ Added
+    main_photo_url = Column(Text, nullable=True)
     
     # ── Activity status ──────────────────────────────────────────────────────
-    is_active = Column(Boolean, default=True, nullable=False)  # ✅ Added
+    is_active = Column(Boolean, default=True, nullable=False)
     
     # ── Audit fields ─────────────────────────────────────────────────────────
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -607,10 +609,11 @@ class Property_Master(Base):
             'tenant_id': self.tenant_id,
             'property_name': self.property_name,
             'property_type': self.property_type,
+            'property_purchase_name': self.property_purchase_name,  # ✅ ADD THIS LINE
             'address': self.address,
             'city': self.city,
             'state': self.state,
-            'postcode': self.postcode,  # 
+            'postcode': self.postcode,
             'country_id': self.country_id,
             'status_id': self.status_id,
             'assigned_agent_id': self.assigned_agent_id,
@@ -632,8 +635,8 @@ class Property_Master(Base):
             'parking_spaces': self.parking_spaces,
             'pet_friendly': self.pet_friendly,
             'furnished': self.furnished,
-            'main_photo_url': self.main_photo_url,  # ✅ Added
-            'is_active': self.is_active,  # ✅ Added
+            'main_photo_url': self.main_photo_url,
+            'is_active': self.is_active,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted

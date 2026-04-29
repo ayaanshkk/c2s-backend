@@ -114,6 +114,7 @@ def get_properties():
                 s.stage_name as status_name,
                 p.assigned_agent_id,
                 em.employee_name as assigned_agent_name,
+                p.property_purchase_name,
                 p.monthly_rent,
                 p.deposit_amount,
                 p.purchase_price,
