@@ -7,12 +7,79 @@ from flask import Blueprint, request, jsonify, g
 from backend.routes.auth_helpers import token_required, get_current_tenant_id
 from backend.db import SessionLocal
 from sqlalchemy import text, func
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import logging
 
 logger = logging.getLogger(__name__)
 
 dashboard_bp = Blueprint('dashboard', __name__, url_prefix='/api/dashboard')
+
+
+FINANCIAL_MONTHS = [
+    (4, "Apr"),
+    (5, "May"),
+    (6, "Jun"),
+    (7, "Jul"),
+    (8, "Aug"),
+    (9, "Sep"),
+    (10, "Oct"),
+    (11, "Nov"),
+    (12, "Dec"),
+    (1, "Jan"),
+    (2, "Feb"),
+    (3, "Mar"),
+]
+
+
+def _parse_financial_year(value: str | None):
+    """Parse UK-style financial years such as 2025-26 into date bounds."""
+    if not value:
+        today = date.today()
+        start_year = today.year if today.month >= 4 else today.year - 1
+    else:
+        cleaned = value.strip()
+        try:
+            start_year = int(cleaned.split("-")[0])
+        except (ValueError, IndexError):
+            return None
+
+    return {
+        "label": f"{start_year}-{str(start_year + 1)[-2:]}",
+        "start_year": start_year,
+        "start_date": date(start_year, 4, 1),
+        "end_date": date(start_year + 1, 3, 31),
+    }
+
+
+def _empty_months(start_year: int):
+    rows = []
+    for month, label in FINANCIAL_MONTHS:
+        year = start_year if month >= 4 else start_year + 1
+        rows.append({
+            "month": label,
+            "month_number": month,
+            "year": year,
+            "rent_collected": 0.0,
+            "expected_rent": 0.0,
+            "maintenance": 0.0,
+            "mortgage": 0.0,
+            "net": 0.0,
+        })
+    return rows
+
+
+def _table_exists(session, table_name: str) -> bool:
+    return bool(session.execute(
+        text("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'StreemLyne_MT'
+                AND table_name = :table_name
+            )
+        """),
+        {"table_name": table_name},
+    ).scalar())
 
 
 # ========================================
@@ -129,6 +196,220 @@ def get_dashboard_overview():
         
     except Exception as e:
         logger.exception("❌ Error fetching dashboard overview")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        session.close()
+
+
+@dashboard_bp.route('/yearly-breakdown', methods=['GET', 'OPTIONS'])
+@token_required
+def get_yearly_breakdown():
+    """
+    Financial-year report for the Reports page.
+
+    Financial year is April to March. Example: 2025-26 = 2025-04-01 to 2026-03-31.
+    Uses paid invoices for collected rent/income where invoice data exists, property expenses
+    for maintenance, mortgage schedules for mortgage cost, and lease/current rent as expected rent.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    fy = _parse_financial_year(request.args.get('year'))
+    if not fy:
+        return jsonify({
+            'success': False,
+            'error': 'Invalid financial year',
+            'message': 'Use a format like 2025-26',
+        }), 400
+
+    session = SessionLocal()
+
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tenant context',
+                'message': 'tenant_id missing in token or X-Tenant-ID mismatch',
+            }), 403
+
+        params = {
+            'tenant_id': tenant_id,
+            'start_date': fy['start_date'],
+            'end_date': fy['end_date'],
+        }
+
+        months = _empty_months(fy['start_year'])
+        month_lookup = {(row['year'], row['month_number']): row for row in months}
+
+        property_stats = session.execute(text('''
+            SELECT
+                COUNT(*) as total_properties,
+                COUNT(CASE WHEN s.stage_name = 'Occupied' THEN 1 END) as occupied_properties,
+                COALESCE(SUM(CASE WHEN s.stage_name = 'Occupied' THEN p.monthly_rent ELSE 0 END), 0) as occupied_monthly_rent,
+                COALESCE(SUM(p.purchase_price), 0) as purchase_value,
+                COALESCE(SUM(p.current_market_value), 0) as current_value
+            FROM "StreemLyne_MT"."Property_Master" p
+            LEFT JOIN "StreemLyne_MT"."Stage_Master" s ON p.status_id = s.stage_id
+            WHERE p.tenant_id = :tenant_id
+            AND p.is_deleted = FALSE
+        '''), {'tenant_id': tenant_id}).first()
+
+        total_properties = int(property_stats.total_properties or 0)
+        occupied_properties = int(property_stats.occupied_properties or 0)
+        fallback_expected_rent = float(property_stats.occupied_monthly_rent or 0) * 12
+
+        rent_collected = 0.0
+        rent_source = 'paid_invoices'
+        if _table_exists(session, 'property_invoices'):
+            invoice_rows = session.execute(text('''
+                SELECT
+                    EXTRACT(YEAR FROM COALESCE(due_date, created_at)::date)::int as year,
+                    EXTRACT(MONTH FROM COALESCE(due_date, created_at)::date)::int as month,
+                    COALESCE(SUM(amount), 0) as total
+                FROM "StreemLyne_MT"."property_invoices"
+                WHERE tenant_id = :tenant_id
+                AND COALESCE(due_date, created_at)::date BETWEEN :start_date AND :end_date
+                AND LOWER(COALESCE(status, '')) IN ('paid', 'collected', 'settled', 'complete', 'completed')
+                GROUP BY year, month
+            '''), params).fetchall()
+            for row in invoice_rows:
+                total = float(row.total or 0)
+                rent_collected += total
+                if (row.year, row.month) in month_lookup:
+                    month_lookup[(row.year, row.month)]['rent_collected'] += total
+        else:
+            rent_source = 'not_available'
+
+        expected_rent = 0.0
+        expected_source = 'lease_agreements'
+        if _table_exists(session, 'property_lease_agreements'):
+            lease_rows = session.execute(text('''
+                SELECT
+                    rent_amount,
+                    COALESCE(start_date, :start_date) as start_date,
+                    COALESCE(end_date, :end_date) as end_date
+                FROM "StreemLyne_MT"."property_lease_agreements"
+                WHERE tenant_id = :tenant_id
+                AND rent_amount IS NOT NULL
+                AND COALESCE(start_date, :start_date) <= :end_date
+                AND COALESCE(end_date, :end_date) >= :start_date
+            '''), params).fetchall()
+
+            for row in lease_rows:
+                amount = float(row.rent_amount or 0)
+                if amount <= 0:
+                    continue
+                for month_row in months:
+                    month_start = date(month_row['year'], month_row['month_number'], 1)
+                    next_month = date(month_row['year'] + (1 if month_row['month_number'] == 12 else 0), 1 if month_row['month_number'] == 12 else month_row['month_number'] + 1, 1)
+                    month_end = next_month - timedelta(days=1)
+                    if row.start_date <= month_end and row.end_date >= month_start:
+                        month_row['expected_rent'] += amount
+                        expected_rent += amount
+
+        if expected_rent <= 0:
+            expected_source = 'current_occupied_monthly_rent'
+            expected_rent = fallback_expected_rent
+            monthly_fallback = fallback_expected_rent / 12 if fallback_expected_rent else 0
+            for month_row in months:
+                month_row['expected_rent'] = monthly_fallback
+
+        maintenance_total = 0.0
+        maintenance_by_category = []
+        if _table_exists(session, 'property_expenses'):
+            expense_rows = session.execute(text('''
+                SELECT
+                    EXTRACT(YEAR FROM COALESCE(incurred_date, created_at)::date)::int as year,
+                    EXTRACT(MONTH FROM COALESCE(incurred_date, created_at)::date)::int as month,
+                    COALESCE(SUM(amount), 0) as total
+                FROM "StreemLyne_MT"."property_expenses"
+                WHERE tenant_id = :tenant_id
+                AND COALESCE(incurred_date, created_at)::date BETWEEN :start_date AND :end_date
+                GROUP BY year, month
+            '''), params).fetchall()
+            for row in expense_rows:
+                total = float(row.total or 0)
+                maintenance_total += total
+                if (row.year, row.month) in month_lookup:
+                    month_lookup[(row.year, row.month)]['maintenance'] += total
+
+            category_rows = session.execute(text('''
+                SELECT COALESCE(category, 'General') as category, COALESCE(SUM(amount), 0) as total
+                FROM "StreemLyne_MT"."property_expenses"
+                WHERE tenant_id = :tenant_id
+                AND COALESCE(incurred_date, created_at)::date BETWEEN :start_date AND :end_date
+                GROUP BY COALESCE(category, 'General')
+                ORDER BY total DESC
+            '''), params).fetchall()
+            maintenance_by_category = [
+                {'category': row.category, 'total': float(row.total or 0)}
+                for row in category_rows
+            ]
+
+        mortgage_total = 0.0
+        if _table_exists(session, 'property_mortgages'):
+            mortgage_rows = session.execute(text('''
+                SELECT
+                    monthly_payment,
+                    COALESCE(start_date, :start_date) as start_date,
+                    COALESCE(end_date, :end_date) as end_date
+                FROM "StreemLyne_MT"."property_mortgages"
+                WHERE tenant_id = :tenant_id
+                AND monthly_payment IS NOT NULL
+                AND COALESCE(start_date, :start_date) <= :end_date
+                AND COALESCE(end_date, :end_date) >= :start_date
+            '''), params).fetchall()
+            for row in mortgage_rows:
+                amount = float(row.monthly_payment or 0)
+                if amount <= 0:
+                    continue
+                for month_row in months:
+                    month_start = date(month_row['year'], month_row['month_number'], 1)
+                    next_month = date(month_row['year'] + (1 if month_row['month_number'] == 12 else 0), 1 if month_row['month_number'] == 12 else month_row['month_number'] + 1, 1)
+                    month_end = next_month - timedelta(days=1)
+                    if row.start_date <= month_end and row.end_date >= month_start:
+                        month_row['mortgage'] += amount
+                        mortgage_total += amount
+
+        for month_row in months:
+            month_row['net'] = month_row['rent_collected'] - month_row['maintenance'] - month_row['mortgage']
+
+        net_income = rent_collected - maintenance_total - mortgage_total
+        expected_net_income = expected_rent - maintenance_total - mortgage_total
+
+        return jsonify({
+            'success': True,
+            'year': fy['label'],
+            'start_date': fy['start_date'].isoformat(),
+            'end_date': fy['end_date'].isoformat(),
+            'summary': {
+                'total_properties': total_properties,
+                'occupied_properties': occupied_properties,
+                'rent_collected': rent_collected,
+                'expected_rent': expected_rent,
+                'maintenance_total': maintenance_total,
+                'mortgage_total': mortgage_total,
+                'net_income': net_income,
+                'expected_net_income': expected_net_income,
+                'purchase_value': float(property_stats.purchase_value or 0),
+                'current_value': float(property_stats.current_value or 0),
+            },
+            'monthly': months,
+            'maintenance_by_category': maintenance_by_category,
+            'data_sources': {
+                'rent_collected': rent_source,
+                'expected_rent': expected_source,
+                'maintenance': 'property_expenses' if _table_exists(session, 'property_expenses') else 'not_available',
+                'mortgage': 'property_mortgages' if _table_exists(session, 'property_mortgages') else 'not_available',
+            },
+        }), 200
+
+    except Exception as e:
+        logger.exception("❌ Error fetching yearly breakdown")
         return jsonify({
             'success': False,
             'error': str(e)
