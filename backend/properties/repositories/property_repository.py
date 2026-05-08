@@ -447,6 +447,10 @@ class PropertyRepository:
             
         except Exception as e:
             session.rollback()
-            raise e
+            self.logger.error(f"Error regenerating invite for agent {agent_id}: {e}")
+            return None
         finally:
-            session.close()
+            try:
+                session.close()
+            except Exception as close_error:
+                self.logger.warning(f"Session close failed (stale connection): {close_error}")

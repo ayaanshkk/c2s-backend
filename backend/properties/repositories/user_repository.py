@@ -364,7 +364,10 @@ class UserRepository:
             session.rollback()
             raise e
         finally:
-            session.close()
+            try:
+                session.close()
+            except Exception as close_error:
+                logger.warning(f"Session close failed: {close_error}")
 
     def update_agent(self, agent_id: int, tenant_id: str, name: str, company_name: str | None, email: str | None, phone: str) -> dict | None:
         """Update agent details"""
@@ -551,9 +554,13 @@ class UserRepository:
             
         except Exception as e:
             session.rollback()
-            raise e
+            self.logger.error(f"Error regenerating invite for agent {agent_id}: {e}")
+            return None
         finally:
-            session.close()
+            try:
+                session.close()
+            except Exception as close_error:
+                self.logger.warning(f"Session close failed: {close_error}")
 
 
     def delete_agent(self, agent_id: int, tenant_id: str) -> None:
