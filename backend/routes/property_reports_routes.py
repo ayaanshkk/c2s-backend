@@ -160,6 +160,252 @@ def get_property_monthly_performance(property_id):
         return jsonify({'error': str(e)}), 500
 
 
+@property_reports_bp.route('/api/purchase-names/<purchase_name>/statement', methods=['GET'])
+@token_required
+def get_purchase_name_statement(purchase_name):
+    """
+    Get statement-style report for all properties under a purchase name over a date range
+    Query params: from_year, from_month, to_year, to_month
+    Returns all transactions (rent payments, maintenance) from all properties under this purchase name
+    """
+    try:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return jsonify({'error': 'Invalid tenant context'}), 403
+        
+        # Get date range parameters
+        from_year = request.args.get('from_year', type=int)
+        from_month = request.args.get('from_month', type=int)
+        to_year = request.args.get('to_year', type=int)
+        to_month = request.args.get('to_month', type=int)
+        
+        # Validate parameters
+        if not all([from_year, from_month, to_year, to_month]):
+            return jsonify({'error': 'Missing date range parameters'}), 400
+        
+        # URL decode the purchase name
+        from urllib.parse import unquote
+        purchase_name = unquote(purchase_name)
+        
+        # Get all properties under this purchase name
+        properties_query = f'''
+            SELECT 
+                property_id,
+                property_name,
+                property_purchase_name,
+                address,
+                city,
+                postcode,
+                monthly_rent,
+                monthly_mortgage_payment,
+                tenant_name
+            FROM "{SCHEMA_PM}"."Property_Master"
+            WHERE property_purchase_name = %s
+            AND tenant_id = %s
+            AND is_deleted = FALSE
+            ORDER BY property_name
+        '''
+        
+        properties_result = supabase.execute_query(
+            properties_query, 
+            (purchase_name, tenant_id)
+        )
+        
+        if not properties_result:
+            return jsonify({'error': 'No properties found for this purchase name'}), 404
+        
+        # Ensure it's a list
+        if not isinstance(properties_result, list):
+            properties_result = [properties_result]
+        
+        property_ids = [prop['property_id'] for prop in properties_result]
+        
+        # Calculate date range
+        from_date = f"{from_year}-{from_month:02d}-01"
+        to_last_day = calendar.monthrange(to_year, to_month)[1]
+        to_date = f"{to_year}-{to_month:02d}-{to_last_day}"
+        
+        from_month_str = f"{from_year}-{from_month:02d}"
+        to_month_str = f"{to_year}-{to_month:02d}"
+        
+        # Get all rent payments for these properties in the date range
+        payments_query = f'''
+            SELECT 
+                p.property_id,
+                pm.property_name,
+                p.month,
+                p.amount,
+                p.status,
+                p.notes
+            FROM {PAYMENTS_TABLE} p
+            JOIN "{SCHEMA_PM}"."Property_Master" pm ON p.property_id = pm.property_id
+            WHERE p.property_id = ANY(%s)
+            AND p.tenant_id = %s
+            AND p.month >= %s
+            AND p.month <= %s
+            ORDER BY p.month ASC, pm.property_name ASC
+        '''
+        
+        payments_result = supabase.execute_query(
+            payments_query,
+            (property_ids, tenant_id, from_month_str, to_month_str)
+        )
+        
+        if payments_result and not isinstance(payments_result, list):
+            payments_result = [payments_result]
+        
+        # Get all maintenance expenses for these properties in the date range
+        maintenance_result = []
+        try:
+            maintenance_query = f'''
+                SELECT 
+                    m.property_id,
+                    pm.property_name,
+                    m.expense_date,
+                    m.amount,
+                    m.category,
+                    m.description,
+                    m.vendor
+                FROM "{SCHEMA_PM}"."Maintenance_Expense" m
+                JOIN "{SCHEMA_PM}"."Property_Master" pm ON m.property_id = pm.property_id
+                WHERE m.property_id = ANY(%s)
+                AND m.tenant_id = %s
+                AND m.expense_date >= %s
+                AND m.expense_date <= %s
+                ORDER BY m.expense_date ASC, pm.property_name ASC
+            '''
+            
+            maintenance_result = supabase.execute_query(
+                maintenance_query,
+                (property_ids, tenant_id, from_date, to_date)
+            )
+            
+            if maintenance_result and not isinstance(maintenance_result, list):
+                maintenance_result = [maintenance_result]
+        except Exception as e:
+            logger.debug(f"Maintenance table not available: {e}")
+            maintenance_result = []
+        
+        # Build transaction list
+        transactions = []
+        
+        # Add rent payments as income transactions
+        for payment in (payments_result or []):
+            month_str = payment.get('month', '')
+            if month_str:
+                year_part, month_part = month_str.split('-')
+                
+                transactions.append({
+                    'date': month_str + '-01',
+                    'type': 'rent',
+                    'description': f"Rent payment - {payment.get('property_name', 'Unknown')} - {calendar.month_name[int(month_part)]} {year_part}",
+                    'category': 'Rental Income',
+                    'property_name': payment.get('property_name', 'Unknown'),
+                    'property_id': payment.get('property_id'),
+                    'amount': float(payment.get('amount', 0) or 0),
+                    'status': payment.get('status', 'unknown'),
+                    'balance_impact': 'credit'
+                })
+        
+        # Add maintenance expenses as debit transactions
+        for expense in (maintenance_result or []):
+            transactions.append({
+                'date': str(expense.get('expense_date', '')),
+                'type': 'maintenance',
+                'description': f"{expense.get('description', 'Maintenance expense')} - {expense.get('property_name', 'Unknown')}",
+                'category': expense.get('category', 'Maintenance'),
+                'property_name': expense.get('property_name', 'Unknown'),
+                'property_id': expense.get('property_id'),
+                'vendor': expense.get('vendor', ''),
+                'amount': float(expense.get('amount', 0) or 0),
+                'balance_impact': 'debit'
+            })
+        
+        # Sort all transactions by date, then by property name
+        transactions.sort(key=lambda x: (x['date'], x.get('property_name', '')))
+        
+        # Calculate running balance and totals
+        running_balance = 0
+        total_income = 0
+        total_expenses = 0
+        
+        for transaction in transactions:
+            if transaction['balance_impact'] == 'credit':
+                running_balance += transaction['amount']
+                total_income += transaction['amount']
+            else:
+                running_balance -= transaction['amount']
+                total_expenses += transaction['amount']
+            
+            transaction['running_balance'] = running_balance
+        
+        # Calculate summary statistics
+        months_in_range = []
+        current_year = from_year
+        current_month = from_month
+        
+        while (current_year < to_year) or (current_year == to_year and current_month <= to_month):
+            months_in_range.append({
+                'year': current_year,
+                'month': current_month,
+                'month_str': f"{current_year}-{current_month:02d}"
+            })
+            current_month += 1
+            if current_month > 12:
+                current_month = 1
+                current_year += 1
+        
+        # Calculate total mortgage for all properties
+        total_monthly_mortgage = sum([float(prop.get('monthly_mortgage_payment', 0) or 0) for prop in properties_result])
+        mortgage_total = total_monthly_mortgage * len(months_in_range)
+        net_income = total_income - total_expenses - mortgage_total
+        
+        # Calculate total monthly rent across all properties
+        total_monthly_rent = sum([float(prop.get('monthly_rent', 0) or 0) for prop in properties_result])
+        
+        return jsonify({
+            'success': True,
+            'purchase_name': purchase_name,
+            'property_count': len(properties_result),
+            'properties': [
+                {
+                    'property_id': prop['property_id'],
+                    'name': prop.get('property_name', ''),
+                    'address': prop.get('address', ''),
+                    'city': prop.get('city', ''),
+                    'postcode': prop.get('postcode', ''),
+                    'tenant_name': prop.get('tenant_name', ''),
+                    'monthly_rent': float(prop.get('monthly_rent', 0) or 0),
+                    'monthly_mortgage': float(prop.get('monthly_mortgage_payment', 0) or 0)
+                }
+                for prop in properties_result
+            ],
+            'period': {
+                'from': f"{from_year}-{from_month:02d}",
+                'to': f"{to_year}-{to_month:02d}",
+                'from_label': f"{calendar.month_name[from_month]} {from_year}",
+                'to_label': f"{calendar.month_name[to_month]} {to_year}",
+                'months_count': len(months_in_range)
+            },
+            'summary': {
+                'total_income': float(total_income),
+                'total_expenses': float(total_expenses),
+                'mortgage_total': float(mortgage_total),
+                'net_income': float(net_income),
+                'transaction_count': len(transactions),
+                'total_monthly_rent': float(total_monthly_rent),
+                'total_monthly_mortgage': float(total_monthly_mortgage)
+            },
+            'transactions': transactions
+        })
+        
+    except Exception as e:
+        logger.error(f"Error generating purchase name statement for {purchase_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @property_reports_bp.route('/api/properties/<int:property_id>/statement', methods=['GET'])
 @token_required
 def get_property_statement(property_id):
