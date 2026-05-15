@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from werkzeug.security import generate_password_hash, check_password_hash
 import secrets
 import re
 import jwt
@@ -123,8 +124,8 @@ def login():
             return jsonify({'error': 'Invalid username or password'}), 401
 
         # ===== 3. VERIFY PASSWORD =====
-        db_password = row.get('password')
-        if db_password != input_password:
+        db_password_hash = row.get('password')
+        if not check_password_hash(db_password_hash, input_password):
             logger.warning(f"❌ Invalid password for {username}")
             return jsonify({'error': 'Invalid username or password'}), 401
 
@@ -260,6 +261,8 @@ def signup():
         employee_id = emp_row.get('employee_id')
 
         # Insert user
+        password_hash = generate_password_hash(password)
+
         insert_user = text('''
             INSERT INTO "StreemLyne_MT"."User_Master" (employee_id, user_name, password)
             VALUES (:employee_id, :user_name, :password)
@@ -268,7 +271,7 @@ def signup():
         user_row = session.execute(insert_user, {
             'employee_id': employee_id,
             'user_name': username,
-            'password': password
+            'password': password_hash  # Use hashed password
         }).mappings().first()
 
         if not user_row or not user_row.get('user_id'):
@@ -374,21 +377,23 @@ def change_password():
             WHERE user_id = :user_id 
             LIMIT 1
         ''')
-        
+
         row = session.execute(sql, {'user_id': user_id}).mappings().first()
-        
-        if not row or row['password'] != current_password:
+
+        if not row or not check_password_hash(row['password'], current_password):
             return jsonify({'error': 'Current password is incorrect'}), 401
-        
-        # Update password
+
+        # Update password (hash it first)
+        new_password_hash = generate_password_hash(new_password)
+
         update_sql = text('''
             UPDATE "StreemLyne_MT"."User_Master"
             SET password = :password
             WHERE user_id = :user_id
         ''')
-        
+
         session.execute(update_sql, {
-            'password': new_password,
+            'password': new_password_hash,
             'user_id': user_id
         })
         
@@ -567,6 +572,8 @@ def accept_invite():
             }), 400
         
         # Update user with username, password, and mark invite as accepted
+        password_hash = generate_password_hash(password)
+
         update_sql = text('''
             UPDATE "StreemLyne_MT"."User_Master"
             SET user_name = :username,
@@ -577,10 +584,10 @@ def accept_invite():
             WHERE user_id = :user_id
             RETURNING user_id, employee_id, user_name
         ''')
-        
+
         updated = session.execute(update_sql, {
             'username': username,
-            'password': password,
+            'password': password_hash,  # Use hashed password
             'user_id': result['user_id']
         }).mappings().first()
         
