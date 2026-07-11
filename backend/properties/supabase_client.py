@@ -99,7 +99,12 @@ class SupabaseClient:
                 dsn=self.connection_string,
                 cursor_factory=RealDictCursor,
                 connect_timeout=10,
-                options="-c search_path=StreemLyne_MT,public"
+                options="-c search_path=StreemLyne_MT,public",
+                # ✅ TCP keepalives — tells the OS to probe idle connections
+                keepalives=1,
+                keepalives_idle=30,       # probe after 30s idle
+                keepalives_interval=10,   # retry every 10s
+                keepalives_count=5,       # give up after 5 failed probes
             )
             print(f"[OK] SupabaseClient: Connection pool created (min=1, max=8)")
         except Exception as e:
@@ -110,16 +115,32 @@ class SupabaseClient:
     def get_connection(self):
         """
         Borrow a connection from the pool, yield it, then return it.
-        Always returns the connection even on error — never leaks.
+        Validates the connection before use and replaces stale ones.
         """
         conn = None
         try:
             conn = self._pool.getconn()
+
+            # Validate the connection — if it's dead, replace it
+            if conn.closed or self._is_connection_stale(conn):
+                try:
+                    self._pool.putconn(conn, close=True)  # discard it
+                except Exception:
+                    pass
+                conn = self._pool.getconn()  # get a fresh one
+
             yield conn
+
         except Exception as e:
             if conn:
                 try:
                     conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    # If the connection errored, discard it from the pool
+                    self._pool.putconn(conn, close=True)
+                    conn = None
                 except Exception:
                     pass
             raise e
@@ -129,6 +150,15 @@ class SupabaseClient:
                     self._pool.putconn(conn)
                 except Exception:
                     pass
+
+    def _is_connection_stale(self, conn) -> bool:
+        """Ping the connection with a lightweight query to check if it's alive."""
+        try:
+            conn.cursor().execute("SELECT 1")
+            conn.rollback()  # don't leave an open transaction
+            return False
+        except Exception:
+            return True
 
     def execute_query(
         self, query: str, params: tuple = None, fetch_one: bool = False
@@ -199,16 +229,6 @@ def get_supabase_client():
         else:
             _supabase_client = _LocalCRMDBStub()
     return _supabase_client
-
-def get_supabase_client():
-    global _supabase_client
-    if _supabase_client is None:
-        if _supabase_env_configured():
-            _supabase_client = SupabaseClient()
-        else:
-            _supabase_client = _LocalCRMDBStub()
-    return _supabase_client
-
 
 # ✅ ADD THIS: Export supabase as a module-level variable
 supabase = get_supabase_client()
