@@ -101,6 +101,8 @@ def login():
         logger.info(f"🔐 Login attempt: {username}")
 
         # ===== 2. FETCH USER + EMPLOYEE =====
+        allowed_tenant_id = get_allowed_login_tenant_id()
+
         user_sql = text('''
             SELECT
                 u.user_id,
@@ -112,15 +114,20 @@ def login():
                 e.email,
                 e.phone
             FROM "StreemLyne_MT"."User_Master" u
-            JOIN "StreemLyne_MT"."Employee_Master" e ON u.employee_id = e.employee_id
+            JOIN "StreemLyne_MT"."Employee_Master" e 
+                ON u.employee_id = e.employee_id
+                AND e.tenant_id = :tenant_id
             WHERE u.user_name = :username
             LIMIT 1;
         ''')
 
-        row = session.execute(user_sql, {'username': username}).mappings().first()
+        row = session.execute(user_sql, {
+            'username': username,
+            'tenant_id': allowed_tenant_id
+        }).mappings().first()
 
         if not row:
-            logger.warning(f"❌ User not found: {username}")
+            logger.warning(f"❌ User not found or not authorised for tenant: {username}")
             return jsonify({'error': 'Invalid username or password'}), 401
 
         # ===== 3. VERIFY PASSWORD =====
@@ -140,17 +147,8 @@ def login():
         
         role_row = session.execute(role_sql, {'user_id': row['user_id']}).mappings().first()
 
-        # ===== 5. GENERATE JWT ===== (tenant_id always string — never from client for authz)
-        tenant_slug = normalize_tenant_id(row.get('tenant_id'))
-        allowed_tenant_id = get_allowed_login_tenant_id()
-        if not tenant_slug or (allowed_tenant_id and tenant_slug != allowed_tenant_id):
-            logger.warning(
-                "Login blocked due to tenant restriction | user=%s user_tenant=%s allowed_tenant=%s",
-                username,
-                tenant_slug,
-                allowed_tenant_id,
-            )
-            return jsonify({'error': 'Invalid username or password'}), 401
+        # ===== 5. GENERATE JWT =====
+        tenant_slug = normalize_tenant_id(row.get('tenant_id'))  # defined BEFORE payload
 
         payload = {
             'user_id': row.get('user_id'),
@@ -179,7 +177,7 @@ def login():
 
         total_time = time.time() - start_time
         logger.info(
-            f"✅ LOGIN SUCCESS | user={username} tenant={row.get('tenant_id')} "
+            f"✅ LOGIN SUCCESS | user={username} tenant={tenant_slug} "
             f"role={user['role']} | Total: {total_time*1000:.0f}ms"
         )
         
